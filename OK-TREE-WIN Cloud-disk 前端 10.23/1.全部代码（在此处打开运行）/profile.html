@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人中心 - 云盘存储</title>
+    <link rel="stylesheet" href="style_2.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#4080FF',
+                        neutral: '#F5F7FA',
+                        dark: '#1D2129',
+                        'gray-light': '#C9CDD4'
+                    },
+                    fontFamily: {
+                        inter: ['Inter', 'system-ui', 'sans-serif']
+                    },
+                    boxShadow: {
+                        'card': '0 2px 10px rgba(0, 0, 0, 0.05)',
+                        'hover': '0 5px 15px rgba(22, 93, 255, 0.08)'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="font-inter bg-neutral text-dark min-h-screen flex flex-col overflow-hidden">
+    <div id="app" class="flex flex-col h-screen overflow-hidden">
+        <!-- 头部组件 -->
+        <header class="header">
+            <div class="header-left">
+                <button @click="toggleSidebar" class="sidebar-toggle md:hidden">
+                    <i class="fa fa-bars"></i>
+                </button>
+                <div class="logo-container">
+                    <i class="logo-icon fa fa-cloud"></i>
+                    <span class="logo-text">云盘存储</span>
+                </div>
+            </div>
+            
+            <div class="header-right">
+                <div class="search-container">
+                    <input 
+                        type="text" 
+                        placeholder="搜索文件和文件夹..." 
+                        class="search-input"
+                    >
+                    <i class="search-icon fa fa-search"></i>
+                </div>
+                
+                <div class="user-menu-container" @click="showUserMenu = !showUserMenu">
+                    <button class="user-menu-button">
+                        <span class="user-name">{{ userName }}</span>
+                        <i class="dropdown-icon fa fa-chevron-down"></i>
+                    </button>
+                    
+                    <div v-if="showUserMenu" class="user-menu">
+                        <a href="profile.html" class="user-menu-item">
+                            <i class="fa fa-user"></i> 个人中心
+                        </a>
+                        <a href="storage.html" class="user-menu-item">
+                            <i class="fa fa-chart-pie"></i> 存储分析
+                        </a>
+                        <div class="divider"></div>
+                        <button class="user-menu-item logout-button" @click="logout">
+                            <i class="fa fa-sign-out"></i> 退出登录
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="flex flex-1 overflow-hidden">
+            <!-- 侧边栏 -->
+            <aside v-if="sidebarOpen" class="sidebar">
+                <div class="sidebar-content">
+                    <div class="sidebar-section">
+                        <div class="sidebar-item" @click="navigateTo('file-manager.html')">
+                            <i class="sidebar-icon fa fa-folder"></i>
+                            <span class="sidebar-text">文件库</span>
+                        </div>
+                        <div class="sidebar-item" @click="navigateTo('recycle-bin.html')">
+                            <i class="sidebar-icon fa fa-trash"></i>
+                            <span class="sidebar-text">回收站</span>
+                        </div>
+                        <div class="sidebar-item" @click="navigateTo('my-shares.html')">
+                            <i class="sidebar-icon fa fa-share-alt"></i>
+                            <span class="sidebar-text">我的分享</span>
+                        </div>
+                        <div class="sidebar-item" @click="navigateTo('sync-folder.html')">
+                            <i class="sidebar-icon fa fa-book"></i>
+                            <span class="sidebar-text">同步文件夹</span>
+                        </div>
+                    </div>
+                    
+                    <div class="sidebar-section">
+                        <div class="sidebar-title">文件分类</div>
+                        <div class="sidebar-item">
+                            <i class="sidebar-icon fa fa-image"></i>
+                            <span class="sidebar-text">图片</span>
+                        </div>
+                        <div class="sidebar-item">
+                            <i class="sidebar-icon fa fa-file-text"></i>
+                            <span class="sidebar-text">文档</span>
+                        </div>
+                        <div class="sidebar-item">
+                            <i class="sidebar-icon fa fa-video-camera"></i>
+                            <span class="sidebar-text">视频</span>
+                        </div>
+                        <div class="sidebar-item">
+                            <i class="sidebar-icon fa fa-music"></i>
+                            <span class="sidebar-text">音频</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 存储使用情况 -->
+                    <div class="storage-info">
+                        <div class="storage-title">存储空间</div>
+                        <div class="storage-stats">
+                            <span>{{ usedStorage }} GB</span>
+                            <span>{{ usedPercent }}% 已使用</span>
+                        </div>
+                        <div class="storage-bar">
+                            <div class="storage-progress" :style="{ width: usedPercent + '%' }"></div>
+                        </div>
+                        <div class="storage-total">总计 {{ totalStorage }} GB</div>
+                        <button class="upgrade-button">升级存储空间</button>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 主内容区 -->
+            <main class="flex-1 overflow-y-auto p-4 md:p-6">
+                <div class="max-w-3xl mx-auto">
+                    <!-- 开发环境提示 -->
+                    <div v-if="isDevelopment" class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 rounded">
+                        <p class="font-bold">开发模式</p>
+                        <p class="text-sm">当前处于本地开发环境，使用模拟数据。所有操作将保存到本地存储。</p>
+                    </div>
+                    
+                    <h2 class="text-2xl font-bold mb-6">个人中心</h2>
+                    
+                    <!-- 个人信息卡片 -->
+                    <div class="card">
+                        <h3 class="text-lg font-medium mb-4">个人资料</h3>
+                        
+                        <div class="flex flex-col md:flex-row gap-6">
+                            
+                            <!-- 个人信息表单 -->
+                            <div class="flex-1 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">用户名</label>
+                                    <input 
+                                        type="text" 
+                                        v-model="userInfo.username" 
+                                        class="form-input" 
+                                        placeholder="请输入用户名"
+                                        :class="{ 'error': formErrors.username }"
+                                    >
+                                    <div v-if="formErrors.username" class="error-message">
+                                        {{ formErrors.username }}
+                                    </div>
+                                </div>
+                                
+                                <div class="flex gap-3 mt-6">
+                                    <button 
+                                        @click="saveProfile" 
+                                        class="btn-primary"
+                                        :class="{ 'btn-loading': profileLoading }"
+                                        :disabled="profileLoading"
+                                    >
+                                        <span v-if="profileLoading" class="loading-spinner"></span>
+                                        {{ profileLoading ? '保存中...' : '保存修改' }}
+                                    </button>
+                                    <button @click="resetProfile" class="btn-secondary">取消</button>
+                                </div>
+                                <div v-if="profileMessage" class="success-message">
+                                    {{ profileMessage }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 密码修改卡片 -->
+                    <div class="card">
+                        <h3 class="text-lg font-medium mb-4">修改密码</h3>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">当前密码</label>
+                                <input 
+                                    type="password" 
+                                    v-model="passwordForm.currentPwd" 
+                                    class="form-input" 
+                                    placeholder="请输入当前密码"
+                                    :class="{ 'error': formErrors.currentPwd }"
+                                >
+                                <div v-if="formErrors.currentPwd" class="error-message">
+                                    {{ formErrors.currentPwd }}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">新密码</label>
+                                <input 
+                                    type="password" 
+                                    v-model="passwordForm.newPwd" 
+                                    class="form-input" 
+                                    placeholder="请输入新密码"
+                                    :class="{ 'error': formErrors.newPwd }"
+                                >
+                                <p class="text-xs text-gray-500 mt-1">密码长度至少8位，包含字母和数字</p>
+                                <div v-if="formErrors.newPwd" class="error-message">
+                                    {{ formErrors.newPwd }}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">确认新密码</label>
+                                <input 
+                                    type="password" 
+                                    v-model="passwordForm.confirmPwd" 
+                                    class="form-input" 
+                                    placeholder="请再次输入新密码"
+                                    :class="{ 'error': formErrors.confirmPwd }"
+                                >
+                                <div v-if="formErrors.confirmPwd" class="error-message">
+                                    {{ formErrors.confirmPwd }}
+                                </div>
+                            </div>
+                            
+                            <button 
+                                @click="changePassword" 
+                                class="btn-primary"
+                                :class="{ 'btn-loading': passwordLoading }"
+                                :disabled="passwordLoading"
+                            >
+                                <span v-if="passwordLoading" class="loading-spinner"></span>
+                                {{ passwordLoading ? '修改中...' : '修改密码' }}
+                            </button>
+                            <div v-if="passwordMessage" class="success-message">
+                                {{ passwordMessage }}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 账户安全卡片 -->
+                    <div class="card">
+                        <h3 class="text-lg font-medium mb-4">账户安全</h3>
+                        
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between p-3 hover:bg-neutral rounded-lg transition-all">
+                                <div class="flex items-center gap-3">
+                                    <i class="fa fa-shield text-primary"></i>
+                                    <span>登录密码</span>
+                                </div>
+                                <button class="text-primary hover:text-primary/80 text-sm">
+                                    <i class="fa fa-edit mr-1"></i>修改
+                                </button>
+                            </div>
+                            
+                            <div class="flex items-center justify-between p-3 hover:bg-neutral rounded-lg transition-all">
+                                <div class="flex items-center gap-3">
+                                    <i class="fa fa-history text-primary"></i>
+                                    <span>登录记录</span>
+                                </div>
+                                <button class="text-primary hover:text-primary/80 text-sm">
+                                    <i class="fa fa-eye mr-1"></i>查看
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+        
+        <!-- 移动端侧边栏遮罩 -->
+        <div 
+            v-if="sidebarOpen && isMobile" 
+            class="overlay md:hidden"
+            @click="toggleSidebar"
+        ></div>
+    </div>
+
+    <script>
+        // 登录状态验证
+        const token = localStorage.getItem('cloudDiskToken');
+        if (!token) {
+            window.location.href = 'login.html';
+        }
+
+        // 智能API配置 - 检测是否在本地环境
+        const isLocalFile = window.location.protocol === 'file:';
+        const isLocalhost = window.location.hostname === 'localhost' || 
+                            window.location.hostname === '127.0.0.1';
+        
+        const IS_DEVELOPMENT = isLocalFile || isLocalhost;
+        const API_BASE_URL = IS_DEVELOPMENT ? '' : 'http://localhost:3000/api';
+
+        // 创建模拟API函数 - 用于开发环境
+        const mockApi = {
+            async get(url) {
+                await new Promise(resolve => setTimeout(resolve, 300));
+                const savedUser = localStorage.getItem('currentUser');
+                return {
+                    code: 200,
+                    data: savedUser ? JSON.parse(savedUser) : { username: '演示用户', bio: '' },
+                    message: 'success'
+                };
+            },
+            
+            async put(url, data) {
+                await new Promise(resolve => setTimeout(resolve, 300));
+                localStorage.setItem('currentUser', JSON.stringify(data));
+                return {
+                    code: 200,
+                    message: '保存成功'
+                };
+            },
+            
+            async post(url, data) {
+                await new Promise(resolve => setTimeout(resolve, 300));
+                return {
+                    code: 200,
+                    message: '密码修改成功'
+                };
+            }
+        };
+
+        // Vue应用初始化
+        const { createApp } = Vue;
+        const app = createApp({
+            data() {
+                return {
+                    // 用户信息
+                    userInfo: {
+                        username: '',
+                        bio: ''
+                    },
+                    // 密码修改表单
+                    passwordForm: {
+                        currentPwd: '',
+                        newPwd: '',
+                        confirmPwd: ''
+                    },
+                    // 表单错误信息
+                    formErrors: {
+                        username: '',
+                        currentPwd: '',
+                        newPwd: '',
+                        confirmPwd: ''
+                    },
+                    // 加载状态
+                    profileLoading: false,
+                    passwordLoading: false,
+                    // 消息提示
+                    profileMessage: '',
+                    passwordMessage: '',
+                    
+                    sidebarOpen: window.innerWidth >= 768,
+                    isMobile: window.innerWidth < 768,
+                    showUserMenu: false,
+                    userName: '',
+                    usedStorage: '2.5',
+                    totalStorage: '10',
+                    usedPercent: 25,
+                    
+                    // 新增：开发模式标识
+                    isDevelopment: IS_DEVELOPMENT
+                }
+            },
+            mounted() {
+                this.loadUserInfo();
+                window.addEventListener('resize', this.checkScreenSize);
+                this.checkScreenSize();
+            },
+            beforeUnmount() {
+                window.removeEventListener('resize', this.checkScreenSize);
+            },
+            methods: {
+                checkScreenSize() {
+                    this.isMobile = window.innerWidth < 768;
+                    if (!this.isMobile) {
+                        this.sidebarOpen = true;
+                    }
+                },
+                toggleSidebar() {
+                    this.sidebarOpen = !this.sidebarOpen;
+                },
+                logout() {
+                    localStorage.removeItem('cloudDiskToken');
+                    localStorage.removeItem('currentUser');
+                    window.location.href = 'login.html';
+                },
+                navigateTo(page) {
+                    window.location.href = page;
+                },
+                
+                // 清除错误信息
+                clearFormErrors() {
+                    this.formErrors = {
+                        username: '',
+                        currentPwd: '',
+                        newPwd: '',
+                        confirmPwd: ''
+                    };
+                },
+                
+                // 使用fetch进行API调用
+                async apiCall(url, options = {}) {
+                    if (this.isDevelopment) {
+                        // 开发环境使用模拟API
+                        const method = options.method || 'GET';
+                        const mockMethod = method.toLowerCase();
+                        return await mockApi[mockMethod](url, options.body ? JSON.parse(options.body) : {});
+                    } else {
+                        // 生产环境使用真实fetch
+                        const defaultOptions = {
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            }
+                        };
+                        
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 10000);
+                        
+                        try {
+                            const response = await fetch(`${API_BASE_URL}${url}`, {
+                                ...defaultOptions,
+                                ...options,
+                                signal: controller.signal
+                            });
+                            clearTimeout(timeoutId);
+                            
+                            if (!response.ok) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
+                            
+                            return await response.json();
+                        } catch (error) {
+                            clearTimeout(timeoutId);
+                            throw error;
+                        }
+                    }
+                },
+                
+                // 加载用户信息
+                async loadUserInfo() {
+                    try {
+                        const result = await this.apiCall('/user/profile');
+                        if (result.code === 200) {
+                            this.userInfo = result.data;
+                            this.userName = this.userInfo.username;
+                        } else {
+                            console.error('获取用户信息失败:', result.message);
+                            this.fallbackToLocalStorage();
+                        }
+                    } catch (error) {
+                        console.error('加载用户信息出错:', error);
+                        this.fallbackToLocalStorage();
+                    }
+                },
+                
+                // 回退到本地存储
+                fallbackToLocalStorage() {
+                    const savedUser = localStorage.getItem('currentUser');
+                    if (savedUser) {
+                        this.userInfo = JSON.parse(savedUser);
+                        this.userName = this.userInfo.username;
+                    } else {
+                        // 初始化默认用户数据
+                        this.userInfo = { username: '新用户', bio: '' };
+                        this.userName = this.userInfo.username;
+                    }
+                },
+                
+                // 保存个人资料
+                async saveProfile() {
+                    this.clearFormErrors();
+                    this.profileMessage = '';
+                    
+                    if (!this.userInfo.username.trim()) {
+                        this.formErrors.username = '请输入用户名';
+                        return;
+                    }
+                    
+                    this.profileLoading = true;
+                    
+                    try {
+                        const result = await this.apiCall('/user/profile', {
+                            method: 'PUT',
+                            body: JSON.stringify(this.userInfo)
+                        });
+                        
+                        if (result.code === 200) {
+                            this.profileMessage = '个人资料保存成功' + (this.isDevelopment ? '（开发模式）' : '');
+                            this.userName = this.userInfo.username;
+                            // 同时更新本地存储作为备份
+                            localStorage.setItem('currentUser', JSON.stringify(this.userInfo));
+                        } else {
+                            this.formErrors.username = result.message || '保存失败';
+                        }
+                    } catch (error) {
+                        console.error('保存个人资料出错:', error);
+                        // 开发环境下的备用保存方案
+                        localStorage.setItem('currentUser', JSON.stringify(this.userInfo));
+                        this.userName = this.userInfo.username;
+                        this.profileMessage = '个人资料已保存到本地存储（开发模式）';
+                    } finally {
+                        this.profileLoading = false;
+                    }
+                },
+                
+                // 重置个人资料
+                resetProfile() {
+                    this.loadUserInfo();
+                    this.clearFormErrors();
+                    this.profileMessage = '';
+                },
+                
+                // 修改密码
+                async changePassword() {
+                    this.clearFormErrors();
+                    this.passwordMessage = '';
+                    
+                    // 前端验证
+                    if (!this.passwordForm.currentPwd) {
+                        this.formErrors.currentPwd = '请输入当前密码';
+                        return;
+                    }
+                    if (this.passwordForm.newPwd.length < 8) {
+                        this.formErrors.newPwd = '新密码长度至少8位';
+                        return;
+                    }
+                    if (this.passwordForm.newPwd !== this.passwordForm.confirmPwd) {
+                        this.formErrors.confirmPwd = '两次输入的新密码不一致';
+                        return;
+                    }
+                    
+                    this.passwordLoading = true;
+                    
+                    try {
+                        const result = await this.apiCall('/user/change-password', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                currentPassword: this.passwordForm.currentPwd,
+                                newPassword: this.passwordForm.newPwd
+                            })
+                        });
+                        
+                        if (result.code === 200) {
+                            this.passwordMessage = '密码修改成功' + (this.isDevelopment ? '（演示模式）' : '，请重新登录');
+                            if (!this.isDevelopment) {
+                                setTimeout(() => {
+                                    this.logout();
+                                }, 1500);
+                            } else {
+                                // 开发模式下清空表单
+                                this.passwordForm = {
+                                    currentPwd: '',
+                                    newPwd: '',
+                                    confirmPwd: ''
+                                };
+                            }
+                        } else {
+                            this.formErrors.currentPwd = result.message || '密码修改失败';
+                        }
+                    } catch (error) {
+                        console.error('修改密码出错:', error);
+                        if (this.isDevelopment) {
+                            this.passwordMessage = '密码修改功能演示（开发模式）';
+                            this.passwordForm = {
+                                currentPwd: '',
+                                newPwd: '',
+                                confirmPwd: ''
+                            };
+                        } else {
+                            this.formErrors.currentPwd = '网络错误，请稍后重试';
+                        }
+                    } finally {
+                        this.passwordLoading = false;
+                    }
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

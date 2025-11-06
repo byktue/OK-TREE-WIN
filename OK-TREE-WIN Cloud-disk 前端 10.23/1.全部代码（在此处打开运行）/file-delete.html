@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>确认删除 - 云盘</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script>
+        // 保持与系统一致的设计主题
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        danger: '#F53F3F',
+                        neutral: '#F5F7FA',
+                        dark: '#1D2129',
+                        'gray-light': '#C9CDD4'
+                    },
+                    fontFamily: {
+                        inter: ['Inter', 'system-ui', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="font-inter bg-neutral min-h-screen flex items-center justify-center p-4">
+    <div id="app" class="w-full max-w-md">
+        <div class="bg-white rounded-xl shadow-lg p-6 md:p-8">
+            <!-- 警告图标 -->
+            <div class="text-danger text-center mb-6">
+                <i class="fa fa-exclamation-triangle text-5xl"></i>
+            </div>
+            
+            <!-- 确认信息 -->
+            <div class="text-center mb-8">
+                <h2 class="text-xl font-bold text-dark mb-3">确认删除</h2>
+                <p class="text-gray-600">您确定要删除文件 <span class="font-medium" v-text="fileName"></span> 吗？</p>
+                <p class="text-gray-500 text-sm mt-2">删除后将移至回收站，30天后自动永久删除</p>
+            </div>
+            
+            <!-- 错误消息显示 -->
+            <div v-if="errorMessage" class="bg-danger/10 text-danger text-sm p-3 rounded-lg mb-6 text-center">
+                {{ errorMessage }}
+            </div>
+            
+            <!-- 操作按钮 -->
+            <div class="flex gap-3">
+                <button @click="cancelDelete" class="flex-1 py-3 border border-gray-200 rounded-lg hover:bg-neutral transition-all">
+                    取消
+                </button>
+                <button @click="confirmDelete" class="flex-1 py-3 bg-danger text-white rounded-lg hover:bg-danger/90 transition-all">
+                    <i class="fa fa-trash mr-1"></i> 确认删除
+                </button>
+            </div>
+        </div>
+        
+        <!-- 返回文件管理链接 -->
+        <div class="text-center mt-4 text-sm text-primary">
+            <a href="file-manager.html" class="hover:underline"><i class="fa fa-arrow-left mr-1"></i> 返回文件管理</a>
+        </div>
+    </div>
+
+    <script>
+        // 路由守卫 - 验证登录状态
+        const checkLoginStatus = () => {
+            const token = localStorage.getItem('cloudDiskToken');
+            if (!token) {
+                window.location.href = 'login.html';
+                return false;
+            }
+            return true;
+        };
+
+        // 初始化应用
+        if (checkLoginStatus()) {
+            const { createApp } = Vue;
+            createApp({
+                data() {
+                    return {
+                        fileId: null,
+                        fileName: '未知文件',
+                        errorMessage: ''
+                    }
+                },
+                mounted() {
+                    // 从URL获取文件ID和名称
+                    const params = new URLSearchParams(window.location.search);
+                    this.fileId = params.get('id');
+                    this.fileName = params.get('name') || this.fileName;
+
+                    // 验证文件ID是否存在
+                    if (!this.fileId) {
+                        this.errorMessage = '未找到要删除的文件信息';
+                    }
+                },
+                methods: {
+                    cancelDelete() {
+                        // 返回上一页或文件管理页
+                        window.history.back();
+                    },
+                    async confirmDelete() {
+                        if (!this.fileId) return;
+
+                        try {
+                            // 调用删除API（实际项目中替换为真实接口）
+                            const response = await fetch(`/api/files/delete`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${localStorage.getItem('cloudDiskToken')}`
+                                },
+                                body: JSON.stringify({ fileIds: [this.fileId] })
+                            });
+
+                            const result = await response.json();
+                            
+                            if (result.success) {
+                                // 删除成功，跳回文件管理页并显示成功提示
+                                window.location.href = 'file-manager.html?deleteSuccess=1';
+                            } else {
+                                this.errorMessage = result.message || '删除失败，请重试';
+                            }
+                        } catch (error) {
+                            this.errorMessage = '网络错误，无法连接服务器';
+                            console.error('删除文件错误:', error);
+                        }
+                    }
+                }
+            }).mount('#app');
+        }
+    </script>
+</body>
+</html>

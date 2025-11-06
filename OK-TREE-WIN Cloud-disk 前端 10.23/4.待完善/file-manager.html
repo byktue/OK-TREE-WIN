@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>云盘 - 文件管理</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="style_2.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#4080FF',
+                        neutral: '#F5F7FA',
+                        dark: '#1D2129',
+                        'gray-light': '#C9CDD4'
+                    },
+                    fontFamily: {
+                        inter: ['Inter', 'system-ui', 'sans-serif']
+                    },
+                    boxShadow: {
+                        'card': '0 2px 10px rgba(0, 0, 0, 0.05)',
+                        'hover': '0 5px 15px rgba(22, 93, 255, 0.08)'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="font-inter bg-neutral min-h-screen flex flex-col text-dark overflow-hidden">
+    <div id="app">
+        <FileManager></FileManager>
+    </div>
+
+    <script>
+        // 登录验证
+        if (!localStorage.getItem('cloudDiskToken')) {
+            window.location.href = 'login.html';
+        }
+
+        // 工具函数：格式化日期
+        const formatDate = (dateString) => {
+            const date = new Date(dateString);
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        };
+
+        // 工具函数：格式化文件大小
+        const formatSize = (bytes) => {
+            if (bytes < 1024) return `${bytes} B`;
+            else if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+            else if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+            else return `${(bytes / 1073741824).toFixed(1)} GB`;
+        };
+
+        // 工具函数：获取文件图标类名
+        const getFileIconClass = (type) => {
+            switch(type) {
+                case 'folder': return 'fa-folder text-yellow-400';
+                case 'image': return 'fa-image text-green-500';
+                case 'doc': return 'fa-file-text text-blue-500';
+                case 'video': return 'fa-video-camera text-purple-500';
+                case 'audio': return 'fa-music text-red-500';
+                case 'pdf': return 'fa-file-pdf-o text-red-500';
+                default: return 'fa-file-o text-gray-400';
+            }
+        };
+
+        // 头部组件
+        const Header = {
+            template: `
+                <header class="header">
+                    <div class="header-left">
+                        <button @click="toggleSidebar" class="sidebar-toggle md:hidden">
+                            <i class="fa fa-bars"></i>
+                        </button>
+                        <div class="logo-container">
+                            <i class="logo-icon fa fa-cloud"></i>
+                            <span class="logo-text">云盘存储</span>
+                        </div>
+                    </div>
+                    
+                    <div class="header-right">
+                        <div class="search-container">
+                            <input 
+                                type="text" 
+                                placeholder="搜索文件和文件夹..." 
+                                class="search-input"
+                                v-model="searchQuery"
+                                @input="handleSearch"
+                            >
+                            <i class="search-icon fa fa-search"></i>
+                        </div>
+                        
+                        <div class="user-menu-container" @click="showUserMenu = !showUserMenu">
+                            <button class="user-menu-button">
+                                <span class="user-name">{{ userName }}</span>
+                                <i class="dropdown-icon fa fa-chevron-down"></i>
+                            </button>
+                            
+                            <div v-if="showUserMenu" class="user-menu">
+                                <a href="profile.html" class="user-menu-item">
+                                    <i class="fa fa-user"></i> 个人中心
+                                </a>
+                                <a href="storage.html" class="user-menu-item">
+                                    <i class="fa fa-hdd-o"></i> 存储情况
+                                </a>
+                                <div class="divider"></div>
+                                <button class="user-menu-item logout-button" @click="logout">
+                                    <i class="fa fa-sign-out"></i> 退出登录
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+            `,
+            data() {
+                return {
+                    searchQuery: '',
+                    showUserMenu: false,
+                    userName: '用户名称'
+                };
+            },
+            methods: {
+                toggleSidebar() {
+                    this.$emit('toggle-sidebar');
+                },
+                handleSearch() {
+                    this.$emit('search', this.searchQuery);
+                },
+                logout() {
+                    localStorage.removeItem('cloudDiskToken');
+                    window.location.href = 'login.html';
+                }
+            }
+        };
+
+        // 侧边栏组件
+        const Sidebar = {
+            template: `
+                <aside :class="['sidebar', isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0']">
+                    <div class="sidebar-content">
+                        <div class="sidebar-section">
+                            <div class="sidebar-item active" :class="{ active: activeCategory === 'all' }" @click="$emit('category-change', 'all')">
+                                <i class="sidebar-icon fa fa-folder"></i>
+                                <span class="sidebar-text">文件库</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('recycle-bin.html')">
+                                <i class="sidebar-icon fa fa-trash"></i>
+                                <span class="sidebar-text">回收站</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('my-shares.html')">
+                                <i class="sidebar-icon fa fa-share-alt"></i>
+                                <span class="sidebar-text">我的分享</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('sync-folder.html')">
+                                <i class="sidebar-icon fa fa-book"></i>
+                                <span class="sidebar-text">同步文件夹</span>
+                            </div>
+                        </div>
+                        
+                        <div class="sidebar-section">
+                            <div class="sidebar-title">文件分类</div>
+                            <div class="sidebar-item" :class="{ active: activeCategory === 'image' }" @click="$emit('category-change', 'image')">
+                                <i class="sidebar-icon fa fa-image"></i>
+                                <span class="sidebar-text">图片</span>
+                            </div>
+                            <div class="sidebar-item" :class="{ active: activeCategory === 'doc' }" @click="$emit('category-change', 'doc')">
+                                <i class="sidebar-icon fa fa-file-text"></i>
+                                <span class="sidebar-text">文档</span>
+                            </div>
+                            <div class="sidebar-item" :class="{ active: activeCategory === 'video' }" @click="$emit('category-change', 'video')">
+                                <i class="sidebar-icon fa fa-video-camera"></i>
+                                <span class="sidebar-text">视频</span>
+                            </div>
+                            <div class="sidebar-item" :class="{ active: activeCategory === 'audio' }" @click="$emit('category-change', 'audio')">
+                                <i class="sidebar-icon fa fa-music"></i>
+                                <span class="sidebar-text">音频</span>
+                            </div>
+                        </div>
+                        
+                        <!-- 存储使用情况 -->
+                        <div class="storage-info">
+                            <div class="storage-title">存储空间</div>
+                            <div class="storage-stats">
+                                <span>{{ usedStorage }} GB</span>
+                                <span>{{ usedPercent }}% 已使用</span>
+                            </div>
+                            <div class="storage-bar">
+                                <div class="storage-progress" :style="{ width: usedPercent + '%' }"></div>
+                            </div>
+                            <div class="storage-total">总计 {{ totalStorage }} GB</div>
+                            <button class="upgrade-button">升级存储空间</button>
+                        </div>
+                    </div>
+                </aside>
+            `,
+            props: ['isOpen', 'activeCategory'],
+            data() {
+                return {
+                    usedStorage: '2.5',
+                    totalStorage: '10',
+                    usedPercent: 25
+                }
+            },
+            methods: {
+                navigateTo(page) {
+                    window.location.href = page;
+                }
+            }
+        };
+
+        // 底部状态栏组件
+        const Footer = {
+            template: `
+                <footer class="bg-white border-t px-4 py-2 text-sm text-gray-500">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <span v-if="selectedCount > 0">{{ selectedCount }} 个文件被选中</span>
+                            <span v-else>共 {{ totalFiles }} 个文件</span>
+                        </div>
+                        <div>已使用 {{ usedStorage }} / {{ totalStorage }} GB</div>
+                    </div>
+                </footer>
+            `,
+            props: ['selectedCount', 'totalFiles', 'usedStorage', 'totalStorage']
+        };
+
+        // 文件操作菜单组件
+        const FileActionMenu = {
+            template: `
+                <div v-if="showMenu" class="absolute z-30 bg-white shadow-lg rounded-lg py-1 w-48" :style="{ top: top + 'px', left: left + 'px' }">
+                    <button class="w-full text-left px-4 py-2 text-sm hover:bg-neutral transition-all flex items-center gap-2" @click="$emit('preview')">
+                        <i class="fa fa-eye"></i> 预览
+                    </button>
+                    <button class="w-full text-left px-4 py-2 text-sm hover:bg-neutral transition-all flex items-center gap-2" @click="$emit('download')">
+                        <i class="fa fa-download"></i> 下载
+                    </button>
+                    <button class="w-full text-left px-4 py-2 text-sm hover:bg-neutral transition-all flex items-center gap-2" @click="$emit('share')">
+                        <i class="fa fa-share-alt"></i> 分享
+                    </button>
+                    <div class="border-t border-gray-100 my-1"></div>
+                    <button class="w-full text-left px-4 py-2 text-sm hover:bg-neutral transition-all flex items-center gap-2 text-red-500" @click="$emit('delete')">
+                        <i class="fa fa-trash"></i> 删除
+                    </button>
+                </div>
+            `,
+            props: ['showMenu', 'top', 'left']
+        };
+
+        // 预览模态框组件
+        const PreviewModal = {
+            template: `
+                <div v-if="show" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+                        <!-- 预览头部 -->
+                        <header class="bg-white shadow-sm px-4 py-3 flex items-center justify-between border-b">
+                            <div class="flex items-center gap-4">
+                                <button @click="$emit('close')" class="text-dark p-2 rounded-full hover:bg-neutral transition-all">
+                                    <i class="fa fa-arrow-left"></i>
+                                </button>
+                                <div class="flex items-center gap-2">
+                                    <i class="fa fa-cloud text-primary text-2xl"></i>
+                                    <h1 class="text-xl font-bold text-dark">文件预览</h1>
+                                </div>
+                            </div>
+                            
+                            <div class="flex items-center gap-4">
+                                <button @click="$emit('download')" class="action-btn action-btn-primary">
+                                    <i class="fa fa-download"></i>
+                                    <span>下载文件</span>
+                                </button>
+                                <button @click="handleShare" class="action-btn action-btn-secondary">
+                                    <i class="fa fa-share-alt"></i>
+                                    <span>分享</span>
+                                </button>
+                            </div>
+                        </header>
+
+                        <!-- 预览内容区 -->
+                        <main class="flex-1 overflow-auto p-6">
+                            <div class="preview-header mb-6">
+                                <h2 class="text-xl font-medium">{{ file.name }}</h2>
+                                <p class="text-gray-light text-sm mt-1">
+                                    修改于 {{ formatDate(file.modifiedTime) }} · {{ formatSize(file.size) }}
+                                </p>
+                            </div>
+
+                            <div class="preview-container">
+                                <!-- 图片预览 -->
+                                <div v-if="file.type === 'image'" class="flex justify-center">
+                                    <img :src="getPreviewUrl()" alt="预览图片" class="max-w-full max-h-[60vh] object-contain">
+                                </div>
+                                
+                                <!-- PDF预览 -->
+                                <div v-else-if="file.type === 'pdf'" class="flex justify-center">
+                                    <div class="bg-gray-100 p-8 rounded-lg text-center">
+                                        <i class="fa fa-file-pdf-o text-6xl text-red-500 mb-4"></i>
+                                        <h3 class="text-lg font-medium mb-2">PDF 预览</h3>
+                                        <p class="text-gray-light mb-6">此处显示PDF文件预览内容</p>
+                                    </div>
+                                </div>
+                                
+                                <!-- 视频预览 -->
+                                <div v-else-if="file.type === 'video'" class="flex justify-center">
+                                    <video controls :src="getPreviewUrl()" class="max-w-full max-h-[60vh]">
+                                        您的浏览器不支持视频播放
+                                      </video>
+                                </div>
+                                
+                                <!-- 音频预览 -->
+                                <div v-else-if="file.type === 'audio'" class="flex justify-center">
+                                    <div class="w-full max-w-md bg-gray-100 p-6 rounded-lg">
+                                        <h3 class="text-center mb-4">{{ file.name }}</h3>
+                                        <audio controls :src="getPreviewUrl()" class="w-full">
+                                            您的浏览器不支持音频播放
+                                          </audio>
+                                    </div>
+                                </div>
+                                
+                                <!-- 文档预览 -->
+                                <div v-else-if="file.type === 'doc'" class="flex justify-center">
+                                    <div class="bg-gray-100 p-8 rounded-lg text-center">
+                                        <i class="fa fa-file-text text-6xl text-blue-500 mb-4"></i>
+                                        <h3 class="text-lg font-medium mb-2">文档预览</h3>
+                                        <p class="text-gray-light mb-6">此处显示文档文件预览内容</p>
+                                    </div>
+                                </div>
+                                
+                                <!-- 不支持的文件类型 -->
+                                <div v-else class="flex flex-col items-center justify-center h-64">
+                                    <i class="fa fa-file-o text-6xl text-gray-light mb-4"></i>
+                                    <h3 class="text-lg font-medium mb-2">当前不支持该文件类型</h3>
+                                    <p class="text-gray-light mb-6">请尝试下载文件后查看</p>
+                                    <button @click="$emit('download')" class="action-btn action-btn-primary">
+                                        <i class="fa fa-download"></i>
+                                        <span>下载文件</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </main>
+                    </div>
+                </div>
+            `,
+            props: ['show', 'file'],
+            methods: {
+                formatDate,
+                formatSize,
+                getPreviewUrl() {
+                    // 实际项目中应返回文件的预览URL
+                    return `https://picsum.photos/800/600?random=${this.file.id}`;
+                },
+                handleShare() {
+                    alert(`分享链接已复制：https://cloud-disk.com/share/${this.file.id}`);
+                }
+            }
+        };
+
+        // 上传模态框组件
+        const UploadModal = {
+            template: `
+                <div v-if="show" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+                        <div class="flex justify-between items-center mb-4 px-6 pt-6">
+                            <h3 class="text-lg font-medium">上传文件</h3>
+                            <button @click="$emit('close')" class="text-gray-light hover:text-dark">
+                                <i class="fa fa-times"></i>
+                            </button>
+                        </div>
+                        
+                        <!-- 错误提示区 -->
+                        <div v-if="errorMsg" class="text-red-500 text-center mb-4 px-6">
+                            <i class="fa fa-exclamation-circle mr-1"></i>{{ errorMsg }}
+                        </div>
+                        
+                        <!-- 上传区域 -->
+                        <div class="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center mb-4 mx-6 hover:border-primary/50 transition-colors cursor-pointer" @click="triggerFileInput" @dragover.prevent @drop.prevent="handleDrop">
+                            <i class="fa fa-cloud-upload text-3xl text-primary mb-2"></i>
+                            <p class="text-gray-500">点击或拖拽文件到此处上传</p>
+                            <p class="text-xs text-gray-light mt-1">支持JPG/PNG/PDF/DOCX/MP4等格式，单个文件≤100MB</p>
+                            <input 
+                                type="file" 
+                                id="uploadFileInput" 
+                                class="hidden" 
+                                multiple 
+                                @change="handleFileSelect"
+                            >
+                        </div>
+                        
+                        <!-- 上传列表 -->
+                        <div class="flex-1 overflow-auto px-6 mb-4">
+                            <div v-for="(file, index) in uploadingFiles" :key="index" class="mb-3">
+                                <div class="flex justify-between items-center mb-1">
+                                    <span class="text-sm truncate max-w-[70%]">{{ file.name }}</span>
+                                    <span class="text-xs text-gray-light">{{ file.progress }}%</span>
+                                </div>
+                                <div class="w-full bg-gray-100 rounded-full h-1.5">
+                                    <div 
+                                        class="bg-primary h-1.5 rounded-full transition-all duration-300"
+                                        :style="{ width: file.progress + '%' }"
+                                    ></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="px-6 pb-6 flex justify-end">
+                            <button @click="$emit('close')" class="action-btn action-btn-secondary mr-2">取消</button>
+                            <button @click="startUpload" class="action-btn action-btn-primary" :disabled="uploadingFiles.length === 0 || isUploading">
+                                <i class="fa fa-start"></i> 开始上传
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `,
+            props: ['show'],
+            data() {
+                return {
+                    uploadingFiles: [],
+                    errorMsg: '',
+                    isUploading: false,
+                    supportedTypes: {
+                        'image/jpeg': true,
+                        'image/png': true,
+                        'application/pdf': true,
+                        'application/msword': true,
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': true,
+                        'video/mp4': true,
+                        'audio/mpeg': true
+                    },
+                    supportedExts: ['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx', 'mp4', 'mp3']
+                };
+            },
+            methods: {
+                triggerFileInput() {
+                    document.getElementById('uploadFileInput').click();
+                },
+                handleFileSelect(e) {
+                    this.processFiles(e.target.files);
+                    e.target.value = ''; // 允许重复选择同一文件
+                },
+                handleDrop(e) {
+                    this.processFiles(e.dataTransfer.files);
+                },
+                processFiles(files) {
+                    this.errorMsg = '';
+                    const validFiles = [];
+                    const invalidFiles = [];
+                    
+                    Array.from(files).forEach(file => {
+                        // 检查文件大小（100MB）
+                        if (file.size > 100 * 1024 * 1024) {
+                            invalidFiles.push(file.name);
+                            return;
+                        }
+                        
+                        // 检查文件类型
+                        if (this.supportedTypes[file.type]) {
+                            validFiles.push({
+                                name: file.name,
+                                size: file.size,
+                                progress: 0
+                            });
+                        } else {
+                            // 尝试通过扩展名检查
+                            const ext = file.name.split('.').pop().toLowerCase();
+                            if (this.supportedExts.includes(ext)) {
+                                validFiles.push({
+                                    name: file.name,
+                                    size: file.size,
+                                    progress: 0
+                                });
+                            } else {
+                                invalidFiles.push(file.name);
+                            }
+                        }
+                    });
+                    
+                    if (invalidFiles.length > 0) {
+                        this.errorMsg = `不支持以下文件：${invalidFiles.join('、')}`;
+                    }
+                    
+                    if (validFiles.length > 0) {
+                        this.uploadingFiles = [...this.uploadingFiles, ...validFiles];
+                    }
+                },
+                startUpload() {
+                    if (this.uploadingFiles.length === 0 || this.isUploading) return;
+                    
+                    this.isUploading = true;
+                    
+                    // 模拟上传进度
+                    this.uploadingFiles.forEach((file, index) => {
+                        let progress = 0;
+                        const interval = setInterval(() => {
+                            progress += Math.random() * 10;
+                            if (progress >= 100) {
+                                progress = 100;
+                                clearInterval(interval);
+                                
+                                // 最后一个文件上传完成
+                                if (index === this.uploadingFiles.length - 1) {
+                                    setTimeout(() => {
+                                        this.isUploading = false;
+                                        this.uploadingFiles = [];
+                                        this.$emit('upload-complete');
+                                        this.$emit('close');
+                                    }, 500);
+                                }
+                            }
+                            this.uploadingFiles[index].progress = Math.floor(progress);
+                        }, 300);
+                    });
+                }
+            }
+        };
+
+        // 下载模态框组件
+        const DownloadModal = {
+            template: `
+                <div v-if="show" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-xl w-full max-w-md">
+                        <div class="p-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-lg font-medium">下载文件</h3>
+                                <button @click="$emit('close')" class="text-gray-light hover:text-dark" :disabled="progress > 0 && !completed">
+                                    <i class="fa fa-times"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="flex items-start gap-4 mb-6">
+                                <i class="fa fa-file-o text-3xl text-gray-400 mt-1"></i>
+                                <div>
+                                    <p class="font-medium truncate">{{ fileName }}</p>
+                                    <p class="text-sm text-gray-light">{{ formatSize(totalSize) }}</p>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-2 flex justify-between text-sm">
+                                <span>下载进度</span>
+                                <span>{{ progress }}%</span>
+                            </div>
+                            <div class="w-full bg-gray-100 rounded-full h-2 mb-4">
+                                <div 
+                                    class="bg-primary h-2 rounded-full transition-all duration-300"
+                                    :style="{ width: progress + '%' }"
+                                ></div>
+                            </div>
+                            <div class="text-xs text-gray-light mt-1 text-right">
+                                {{ formatSize(downloadedSize) }} / {{ formatSize(totalSize) }}
+                            </div>
+                            
+                            <div v-if="completed" class="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 mt-4">
+                                <div class="flex items-center gap-3">
+                                    <i class="fa fa-check-circle text-green-500 text-xl"></i>
+                                    <div>
+                                        <p class="font-medium">下载已完成</p>
+                                        <p class="text-sm text-gray-light">文件已保存到本地</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="px-6 pb-6 flex justify-end">
+                            <button 
+                                class="action-btn"
+                                :class="completed ? 'action-btn-primary' : 'action-btn-secondary'"
+                                @click="$emit('close')"
+                                :disabled="!completed && progress > 0"
+                            >
+                                {{ completed ? '完成' : '取消' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `,
+            props: ['show', 'fileName', 'totalSize'],
+            data() {
+                return {
+                    progress: 0,
+                    downloadedSize: 0,
+                    completed: false,
+                    downloadInterval: null
+                };
+            },
+            methods: {
+                formatSize,
+                startDownloadSimulation() {
+                    this.progress = 0;
+                    this.downloadedSize = 0;
+                    this.completed = false;
+                    
+                    const total = this.totalSize;
+                    
+                    this.downloadInterval = setInterval(() => {
+                        const increment = Math.floor(Math.random() * 5) + 1;
+                        this.progress += increment;
+                        this.downloadedSize = Math.floor((this.progress / 100) * total);
+                        
+                        if (this.progress >= 100) {
+                            this.progress = 100;
+                            this.downloadedSize = total;
+                            this.completed = true;
+                            clearInterval(this.downloadInterval);
+                        }
+                    }, 300);
+                },
+                resetDownload() {
+                    if (this.downloadInterval) {
+                        clearInterval(this.downloadInterval);
+                    }
+                }
+            },
+            watch: {
+                show(newVal) {
+                    if (newVal) {
+                        this.startDownloadSimulation();
+                    } else {
+                        this.resetDownload();
+                    }
+                }
+            },
+            beforeUnmount() {
+                this.resetDownload();
+            }
+        };
+
+        // 删除确认模态框组件
+        const DeleteModal = {
+            template: `
+                <div v-if="show" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-xl w-full max-w-md p-6">
+                        <div class="text-center mb-6">
+                            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-50 text-red-500 mb-4">
+                                <i class="fa fa-trash text-2xl"></i>
+                            </div>
+                            <h3 class="text-lg font-medium mb-2">确认删除</h3>
+                            <p class="text-gray-light">
+                                您确定要删除 {{ fileName }} 吗？删除后将移至回收站，30天后自动删除。
+                            </p>
+                        </div>
+                        
+                        <div class="flex justify-end gap-3">
+                            <button class="action-btn action-btn-secondary" @click="$emit('cancel')">
+                                取消
+                            </button>
+                            <button class="action-btn bg-red-500 text-white hover:bg-red-600" @click="$emit('confirm')">
+                                确认删除
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `,
+            props: ['show', 'fileName']
+        };
+
+        // 主文件管理组件
+        const FileManager = {
+            template: `
+                <div class="flex flex-col h-screen">
+                    <!-- 头部 -->
+                    <Header 
+                        @toggle-sidebar="toggleSidebar" 
+                        @search="handleSearch"
+                    ></Header>
+                    
+                    <!-- 主内容区 -->
+                    <div class="flex flex-1 overflow-hidden">
+                        <!-- 侧边栏 -->
+                        <Sidebar 
+                            :is-open="sidebarOpen" 
+                            :active-category="currentCategory"
+                            @category-change="handleCategoryChange"
+                        ></Sidebar>
+                        
+                        <!-- 遮罩层 - 移动端侧边栏打开时显示 -->
+                        <div 
+                            v-if="sidebarOpen && isMobile" 
+                            class="overlay md:hidden"
+                            @click="toggleSidebar"
+                        ></div>
+                        
+                        <!-- 主内容 -->
+                        <main class="flex-1 overflow-auto p-4 md:p-6">
+                            <!-- 工具栏 -->
+                            <div class="card">
+                                <div class="flex flex-wrap items-center justify-between gap-4">
+                                    <div class="flex items-center gap-3">
+                                        <button class="toolbar-btn-primary" @click="showUploadModal = true">
+                                            <i class="fa fa-plus mr-1"></i> 上传文件
+                                        </button>
+                                        <button class="toolbar-btn">
+                                            <i class="fa fa-folder mr-1"></i> 新建文件夹
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="flex items-center gap-3">
+                                        <div class="relative">
+                                            <button class="toolbar-btn">
+                                                <i class="fa fa-sort mr-1"></i> 排序
+                                                <i class="fa fa-chevron-down text-xs ml-1"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 视图切换 -->
+                            <div class="flex items-center gap-3 mb-4">
+                                <div class="flex border rounded-lg overflow-hidden">
+                                    <button 
+                                        class="px-3 py-1.5 text-sm bg-primary text-white"
+                                        @click="viewMode = 'grid'"
+                                    >
+                                        <i class="fa fa-th-large"></i>
+                                    </button>
+                                    <button 
+                                        class="px-3 py-1.5 text-sm hover:bg-neutral"
+                                        @click="viewMode = 'list'"
+                                    >
+                                        <i class="fa fa-list"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- 面包屑导航 -->
+                            <div class="text-sm mb-4">
+                                <span class="text-primary cursor-pointer hover:underline">全部文件</span>
+                                <i class="fa fa-angle-right text-gray-light mx-1"></i>
+                                <span>当前文件夹</span>
+                            </div>
+                            
+                            <!-- 文件列表/网格 -->
+                            <div v-if="filteredFiles.length > 0" :class="viewMode === 'grid' ? 'file-grid' : 'space-y-0'">
+                                <!-- 网格视图 -->
+                                <div v-for="file in filteredFiles" :key="file.id" class="card cursor-pointer" 
+                                    @click="handleFileClick(file)"
+                                    @contextmenu.prevent="showFileActionMenu($event, file)">
+                                    <div class="flex flex-col items-center text-center">
+                                        <div class="w-16 h-16 flex items-center justify-center mb-3">
+                                            <i v-if="file.type === 'folder'" class="fa fa-folder text-3xl text-yellow-400"></i>
+                                            <i v-else-if="file.type === 'image'" class="fa fa-image text-3xl text-green-500"></i>
+                                            <i v-else-if="file.type === 'doc'" class="fa fa-file-text text-3xl text-blue-500"></i>
+                                            <i v-else-if="file.type === 'video'" class="fa fa-video-camera text-3xl text-purple-500"></i>
+                                            <i v-else-if="file.type === 'audio'" class="fa fa-music text-3xl text-red-500"></i>
+                                            <i v-else-if="file.type === 'pdf'" class="fa fa-file-pdf-o text-3xl text-red-500"></i>
+                                            <i v-else class="fa fa-file-o text-3xl text-gray-400"></i>
+                                        </div>
+                                        <p class="truncate w-full">{{ file.name }}</p>
+                                        <p class="text-xs text-gray-light mt-1">{{ formatDate(file.modifiedTime) }}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 列表视图 -->
+                            <div v-else-if="filteredFiles.length > 0 && viewMode === 'list'" class="card overflow-hidden">
+                                <div class="file-list-row bg-gray-50 font-medium">
+                                    <div class="col-span-6 md:col-span-4">文件名</div>
+                                    <div class="col-span-3 hidden md:block">修改时间</div>
+                                    <div class="col-span-3 hidden lg:block">大小</div>
+                                    <div class="col-span-3 flex justify-end">操作</div>
+                                </div>
+                                <div v-for="file in filteredFiles" :key="file.id" class="file-list-row">
+                                    <div class="col-span-6 md:col-span-4 flex items-center gap-3">
+                                        <i v-if="file.type === 'folder'" class="fa fa-folder text-xl text-yellow-400"></i>
+                                        <i v-else-if="file.type === 'image'" class="fa fa-image text-xl text-green-500"></i>
+                                        <i v-else-if="file.type === 'doc'" class="fa fa-file-text text-xl text-blue-500"></i>
+                                        <i v-else-if="file.type === 'video'" class="fa fa-video-camera text-xl text-purple-500"></i>
+                                        <i v-else-if="file.type === 'audio'" class="fa fa-music text-xl text-red-500"></i>
+                                        <i v-else-if="file.type === 'pdf'" class="fa fa-file-pdf-o text-xl text-red-500"></i>
+                                        <i v-else class="fa fa-file-o text-xl text-gray-400"></i>
+                                        <span>{{ file.name }}</span>
+                                    </div>
+                                    <div class="col-span-3 hidden md:block text-sm text-gray-light">{{ formatDate(file.modifiedTime) }}</div>
+                                    <div class="col-span-3 hidden lg:block text-sm text-gray-light">{{ formatSize(file.size) }}</div>
+                                    <div class="col-span-3 flex justify-end gap-2">
+                                        <button class="p-1 hover:bg-neutral rounded" @click.stop="handlePreview(file)">
+                                            <i class="fa fa-eye text-gray-500"></i>
+                                        </button>
+                                        <button class="p-1 hover:bg-neutral rounded" @click.stop="handleDownload(file)">
+                                            <i class="fa fa-download text-gray-500"></i>
+                                        </button>
+                                        <button class="p-1 hover:bg-neutral rounded" @click.stop="showFileActionMenu($event, file, true)">
+                                            <i class="fa fa-ellipsis-v text-gray-500"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 空状态 -->
+                            <div v-else class="card p-12 text-center">
+                                <i class="fa fa-folder-open text-6xl text-gray-light mb-4"></i>
+                                <h3 class="text-lg font-medium mb-2">当前文件夹为空</h3>
+                                <p class="text-gray-light mb-6">上传文件或创建新文件夹来开始使用</p>
+                                <button class="action-btn-primary" @click="showUploadModal = true">
+                                    <i class="fa fa-plus"></i>
+                                    <span>上传文件</span>
+                                </button>
+                            </div>
+                        </main>
+                    </div>
+                    
+                    <!-- 底部状态栏 -->
+                    <Footer 
+                        :selected-count="selectedFiles.length" 
+                        :total-files="filteredFiles.length"
+                        :used-storage="usedStorage"
+                        :total-storage="totalStorage"
+                    ></Footer>
+                    
+                    <!-- 组件引用 -->
+                    <FileActionMenu 
+                        :show-menu="showActionMenu"
+                        :top="menuTop"
+                        :left="menuLeft"
+                        @preview="handlePreview(selectedFile)"
+                        @download="handleDownload(selectedFile)"
+                        @share="handleShare(selectedFile)"
+                        @delete="handleDeleteClick(selectedFile)"
+                    ></FileActionMenu>
+                    
+                    <PreviewModal 
+                        :show="showPreviewModal"
+                        :file="previewFile"
+                        @close="showPreviewModal = false"
+                        @download="handleDownload(previewFile)"
+                    ></PreviewModal>
+                    
+                    <UploadModal 
+                        :show="showUploadModal"
+                        @close="showUploadModal = false"
+                        @upload-complete="handleUploadComplete"
+                    ></UploadModal>
+                    
+                    <DownloadModal 
+                        :show="showDownloadModal"
+                        :file-name="downloadFile?.name"
+                        :total-size="downloadFile?.size"
+                        @close="showDownloadModal = false"
+                    ></DownloadModal>
+                    
+                    <DeleteModal 
+                        :show="showDeleteModal"
+                        :file-name="deleteFile?.name"
+                        @cancel="showDeleteModal = false"
+                        @confirm="handleDeleteConfirm"
+                    ></DeleteModal>
+                </div>
+            `,
+            components: {
+                Header,
+                Sidebar,
+                Footer,
+                FileActionMenu,
+                PreviewModal,
+                UploadModal,
+                DownloadModal,
+                DeleteModal
+            },
+            data() {
+                return {
+                    sidebarOpen: true,
+                    currentCategory: 'all',
+                    viewMode: 'grid',
+                    searchQuery: '',
+                    selectedFiles: [],
+                    showActionMenu: false,
+                    menuTop: 0,
+                    menuLeft: 0,
+                    selectedFile: null,
+                    showPreviewModal: false,
+                    previewFile: null,
+                    showUploadModal: false,
+                    showDownloadModal: false,
+                    downloadFile: null,
+                    showDeleteModal: false,
+                    deleteFile: null,
+                    usedStorage: '2.5',
+                    totalStorage: '10',
+                    isMobile: window.innerWidth < 768,
+                    files: [
+                        {
+                            id: 1,
+                            name: '风景照片',
+                            type: 'folder',
+                            modifiedTime: '2023-10-15T10:30:00',
+                            size: 0
+                        },
+                        {
+                            id: 2,
+                            name: '工作报告.docx',
+                            type: 'doc',
+                            modifiedTime: '2023-10-14T15:45:00',
+                            size: 2048000
+                        },
+                        {
+                            id: 3,
+                            name: '会议记录.pdf',
+                            type: 'pdf',
+                            modifiedTime: '2023-10-13T09:15:00',
+                            size: 1572864
+                        },
+                        {
+                            id: 4,
+                            name: '产品演示.mp4',
+                            type: 'video',
+                            modifiedTime: '2023-10-12T16:20:00',
+                            size: 104857600
+                        },
+                        {
+                            id: 5,
+                            name: '背景音乐.mp3',
+                            type: 'audio',
+                            modifiedTime: '2023-10-11T11:50:00',
+                            size: 3145728
+                        },
+                        {
+                            id: 6,
+                            name: '项目截图.png',
+                            type: 'image',
+                            modifiedTime: '2023-10-10T14:30:00',
+                            size: 851968
+                        }
+                    ]
+                };
+            },
+            computed: {
+                filteredFiles() {
+                    // 先按类别过滤
+                    let result = this.files;
+                    
+                    if (this.currentCategory !== 'all') {
+                        result = result.filter(file => file.type === this.currentCategory);
+                    }
+                    
+                    // 再按搜索关键词过滤
+                    if (this.searchQuery) {
+                        const query = this.searchQuery.toLowerCase();
+                        result = result.filter(file => 
+                            file.name.toLowerCase().includes(query)
+                        );
+                    }
+                    
+                    return result;
+                }
+            },
+            methods: {
+                formatDate,
+                formatSize,
+                toggleSidebar() {
+                    this.sidebarOpen = !this.sidebarOpen;
+                },
+                handleCategoryChange(category) {
+                    this.currentCategory = category;
+                },
+                handleSearch(query) {
+                    this.searchQuery = query;
+                },
+                showFileActionMenu(e, file, isLeftClick = false) {
+                    e.stopPropagation();
+                    
+                    this.selectedFile = file;
+                    this.showActionMenu = true;
+                    this.menuTop = e.clientY;
+                    this.menuLeft = e.clientX;
+                    
+                    // 点击其他区域关闭菜单
+                    if (isLeftClick) {
+                        setTimeout(() => {
+                            document.addEventListener('click', this.closeActionMenu);
+                        }, 0);
+                    }
+                },
+                closeActionMenu() {
+                    this.showActionMenu = false;
+                    document.removeEventListener('click', this.closeActionMenu);
+                },
+                handleFileClick(file) {
+                    if (file.type === 'folder') {
+                        // 文件夹点击逻辑
+                        alert(`打开文件夹: ${file.name}`);
+                    } else {
+                        this.handlePreview(file);
+                    }
+                },
+                handlePreview(file) {
+                    this.previewFile = file;
+                    this.showPreviewModal = true;
+                    this.showActionMenu = false;
+                },
+                handleDownload(file) {
+                    this.downloadFile = file;
+                    this.showDownloadModal = true;
+                    this.showActionMenu = false;
+                    this.showPreviewModal = false;
+                },
+                handleShare(file) {
+                    alert(`分享链接已复制：https://cloud-disk.com/share/${file.id}`);
+                    this.showActionMenu = false;
+                },
+                handleDeleteClick(file) {
+                    this.deleteFile = file;
+                    this.showDeleteModal = true;
+                    this.showActionMenu = false;
+                },
+                handleDeleteConfirm() {
+                    // 实际项目中应调用API删除文件
+                    this.files = this.files.filter(file => file.id !== this.deleteFile.id);
+                    this.showDeleteModal = false;
+                    alert('文件已移至回收站');
+                },
+                handleUploadComplete() {
+                    // 模拟上传成功后添加新文件
+                    this.files.unshift({
+                        id: Date.now(),
+                        name: `新文件-${Date.now()}.jpg`,
+                        type: 'image',
+                        modifiedTime: new Date().toISOString(),
+                        size: Math.floor(Math.random() * 1000000) + 100000
+                    });
+                    alert('文件上传成功');
+                }
+            },
+            mounted() {
+                // 监听窗口大小变化，更新移动端判断
+                window.addEventListener('resize', () => {
+                    this.isMobile = window.innerWidth < 768;
+                    if (window.innerWidth >= 768) {
+                        this.sidebarOpen = true;
+                    }
+                });
+                
+                // 点击空白处关闭菜单
+                document.addEventListener('click', (e) => {
+                    if (!e.target.closest('.file-grid > div') && 
+                        !e.target.closest('.file-list-row') &&
+                        !e.target.closest('.fa-ellipsis-v')) {
+                        this.showActionMenu = false;
+                    }
+                });
+            }
+        };
+
+        // 创建Vue实例并挂载
+        const { createApp } = Vue;
+        createApp(FileManager).mount('#app');
+    </script>
+</body>
+</html>
