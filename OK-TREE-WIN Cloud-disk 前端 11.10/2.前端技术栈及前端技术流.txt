@@ -1,0 +1,10 @@
+前端技术栈
+├── 核心框架: Vue.js 3 (组合式API)
+├── 路由管理: Vue Router 4
+├── UI框架: Tailwind CSS
+├── 图标库: Font Awesome 4.7.0
+├── 图表库: Chart.js (存储分析页面)
+└── 构建工具: CDN引入，无需构建
+
+前端技术流
+用户操作 → Vue组件 → 状态管理 → API调用 → 响应处理 → UI更新
