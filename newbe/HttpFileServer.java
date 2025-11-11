@@ -25,9 +25,9 @@ public class HttpFileServer {
     private static final String RECYCLE_DIR = "recycle_bin";
     private static final String UPLOAD_DIR = STORAGE_DIR + File.separator + "uploads";
 
-    // JWT配置（替换为自己的密钥，建议生产环境用更复杂密钥并存储在配置文件）
-    private static final String JWT_SECRET = "your-256-bit-secret-key-1234567890abcdef";
-    private static final long JWT_EXPIRE = 24 * 60 * 60 * 1000; // 24小时
+    // JWT配置（生产环境建议用32位以上随机密钥，存储在配置文件）
+    private static final String JWT_SECRET = "x8V2#zQ9!pL7@wK3$rT5*yB1&mN4%vF6^gH8(jU0)tR2";
+    private static final long JWT_EXPIRE = 8 * 60 * 60 * 1000; // 8小时过期（更安全）
     private static final Key JWT_KEY = Keys.hmacShaKeyFor(JWT_SECRET.getBytes(StandardCharsets.UTF_8));
 
     // 数据库连接和锁
@@ -126,13 +126,19 @@ public class HttpFileServer {
 
     // -------------------------- 抽象Token验证Handler --------------------------
     /**
-     * 所有需要Token认证的接口都继承此类，统一处理Token验证
+     * 所有需要Token认证的接口都继承此类，统一处理Token验证和CORS
      */
     static abstract class AbstractTokenHandler implements HttpHandler {
         protected UserTokenInfo userInfo; // 验证通过后的用户信息
 
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            // 处理CORS预检请求（关键修改：所有需认证接口都加CORS）
+            handleCorsPreflight(exchange);
+            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                return;
+            }
+
             // 1. 从请求头获取Token（格式：Authorization: Bearer <token>）
             String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -196,22 +202,18 @@ public class HttpFileServer {
                     "delete_time DATETIME, " +
                     "FOREIGN KEY(uploader_id) REFERENCES users(id))");
             
-            // 初始化管理员账户（admin/admin）
+            // 初始化管理员账户（admin/admin123，与前端测试账号对齐）
             ResultSet rs = stmt.executeQuery("SELECT id FROM users WHERE username = 'admin'");
             if (!rs.next()) {
-                stmt.execute("INSERT INTO users (username, password, is_admin) VALUES ('admin', 'admin', 1)");
+                stmt.execute("INSERT INTO users (username, password, is_admin) VALUES ('admin', 'admin123', 1)");
+                System.out.println("默认管理员账户已创建：admin/admin123");
             }
-        }
-    }
-
-    private static void sendResponse(HttpExchange exchange, int statusCode, Object response) throws IOException {
-        String json = gson.toJson(response);
-        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type"); // 允许Authorization头
-        exchange.sendResponseHeaders(statusCode, json.getBytes(StandardCharsets.UTF_8).length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(json.getBytes(StandardCharsets.UTF_8));
+            // 初始化测试账户（test/test123）
+            rs = stmt.executeQuery("SELECT id FROM users WHERE username = 'test'");
+            if (!rs.next()) {
+                stmt.execute("INSERT INTO users (username, password) VALUES ('test', 'test123')");
+                System.out.println("测试账户已创建：test/test123");
+            }
         }
     }
 
@@ -233,6 +235,35 @@ public class HttpFileServer {
         return sb.toString();
     }
 
+    // CORS 预检请求处理方法（全局统一配置，支持所有必要方法）
+    private static void handleCorsPreflight(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        exchange.getResponseHeaders().set("Access-Control-Max-Age", "86400");
+
+        if ("OPTIONS".equals(exchange.getRequestMethod())) {
+            // 显式设置空响应体，避免Content-Length误判
+            exchange.sendResponseHeaders(204, 0);
+            exchange.getResponseBody().close(); // 立即关闭响应体，确保无内容
+        }
+    }
+
+    // 统一响应方法（补充完整CORS头，确保前端能解析）
+    private static void sendResponse(HttpExchange exchange, int statusCode, Object response) throws IOException {
+        String json = gson.toJson(response);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
+        // 完整CORS响应头（与预检请求保持一致，避免跨域错误）
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+        exchange.sendResponseHeaders(statusCode, json.getBytes(StandardCharsets.UTF_8).length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(json.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    
     // -------------------------- 日志包装Handler --------------------------
     static class LoggingHandler implements HttpHandler {
         private final HttpHandler delegate;
@@ -243,7 +274,7 @@ public class HttpFileServer {
 
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // 打印请求日志
+            // 打印请求日志（便于调试）
             System.out.printf("[%s] %s %s%n", 
                     new Date(), 
                     exchange.getRequestMethod(), 
@@ -253,10 +284,16 @@ public class HttpFileServer {
     }
 
     // -------------------------- 认证相关接口 --------------------------
-    // 登录接口（无需认证，返回Token）
+    // 登录接口（核心优化：响应格式与前端完全对齐，错误明确返回success:false）
     static class LoginHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            // 处理CORS预检请求
+            handleCorsPreflight(exchange);
+            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                return;
+            }
+
             if (!"POST".equals(exchange.getRequestMethod())) {
                 sendResponse(exchange, 405, Map.of("success", false, "message", "只支持POST方法"));
                 return;
@@ -265,8 +302,15 @@ public class HttpFileServer {
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
                 JsonObject req = gson.fromJson(br, JsonObject.class);
-                String username = req.get("username").getAsString();
-                String password = req.get("password").getAsString();
+                
+                // 校验请求参数（避免空指针）
+                if (!req.has("username") || !req.has("password")) {
+                    sendResponse(exchange, 400, Map.of("success", false, "message", "缺少用户名或密码参数"));
+                    return;
+                }
+                
+                String username = req.get("username").getAsString().trim();
+                String password = req.get("password").getAsString().trim();
 
                 dbLock.lock();
                 try (PreparedStatement pstmt = db.prepareStatement(
@@ -284,11 +328,11 @@ public class HttpFileServer {
                                 rs.getInt("is_member") == 1
                         );
 
-                        // 返回Token和用户信息
+                        // 成功响应：与前端约定的格式（success:true + token + user）
                         sendResponse(exchange, 200, Map.of(
                                 "success", true,
                                 "message", "登录成功",
-                                "token", token, // 前端需保存此Token
+                                "token", token, // 前端需保存此Token用于后续接口
                                 "user", Map.of(
                                         "id", rs.getInt("id"),
                                         "username", username,
@@ -297,21 +341,29 @@ public class HttpFileServer {
                                 )
                         ));
                     } else {
+                        // 失败响应：明确返回success:false，前端不跳转
                         sendResponse(exchange, 401, Map.of("success", false, "message", "用户名或密码错误"));
                     }
                 } finally {
                     dbLock.unlock();
                 }
             } catch (Exception e) {
+                // 服务器错误：统一返回success:false
                 sendResponse(exchange, 500, Map.of("success", false, "message", "服务器错误: " + e.getMessage()));
             }
         }
     }
 
-    // 注册接口（无需认证）
+    // 注册接口（优化：错误响应格式统一）
     static class RegisterHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            // 处理CORS预检请求
+            handleCorsPreflight(exchange);
+            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                return;
+            }
+
             if (!"POST".equals(exchange.getRequestMethod())) {
                 sendResponse(exchange, 405, Map.of("success", false, "message", "只支持POST方法"));
                 return;
@@ -320,8 +372,21 @@ public class HttpFileServer {
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
                 JsonObject req = gson.fromJson(br, JsonObject.class);
-                String username = req.get("username").getAsString();
-                String password = req.get("password").getAsString();
+                
+                // 校验参数
+                if (!req.has("username") || !req.has("password")) {
+                    sendResponse(exchange, 400, Map.of("success", false, "message", "缺少用户名或密码参数"));
+                    return;
+                }
+                
+                String username = req.get("username").getAsString().trim();
+                String password = req.get("password").getAsString().trim();
+
+                // 简单参数校验
+                if (username.length() < 3 || password.length() < 6) {
+                    sendResponse(exchange, 400, Map.of("success", false, "message", "用户名至少3位，密码至少6位"));
+                    return;
+                }
 
                 dbLock.lock();
                 try (PreparedStatement pstmt = db.prepareStatement(
@@ -329,7 +394,7 @@ public class HttpFileServer {
                     pstmt.setString(1, username);
                     pstmt.setString(2, password);
                     pstmt.executeUpdate();
-                    sendResponse(exchange, 200, Map.of("success", true, "message", "注册成功"));
+                    sendResponse(exchange, 200, Map.of("success", true, "message", "注册成功，请登录"));
                 } catch (SQLException e) {
                     sendResponse(exchange, 400, Map.of("success", false, "message", "用户名已存在"));
                 } finally {
@@ -340,6 +405,7 @@ public class HttpFileServer {
             }
         }
     }
+
 
     // -------------------------- 用户相关接口（需Token） --------------------------
     // 用户信息接口（GET获取/POST修改）
@@ -358,12 +424,14 @@ public class HttpFileServer {
                         if (rs.next()) {
                             Map<String, Object> user = new HashMap<>();
                             user.put("username", rs.getString("username"));
-                            user.put("nickname", rs.getString("nickname"));
-                            user.put("email", rs.getString("email"));
+                            user.put("nickname", rs.getString("nickname") != null ? rs.getString("nickname") : "");
+                            user.put("email", rs.getString("email") != null ? rs.getString("email") : "");
                             user.put("isAdmin", rs.getInt("is_admin") == 1);
                             user.put("isMember", rs.getInt("is_member") == 1);
                             
                             sendResponse(exchange, 200, Map.of("success", true, "data", user));
+                        } else {
+                            sendErrorResponse(exchange, 404, "用户不存在");
                         }
                     } finally {
                         dbLock.unlock();
@@ -373,11 +441,17 @@ public class HttpFileServer {
                     JsonObject req = gson.fromJson(
                             new InputStreamReader(exchange.getRequestBody()), JsonObject.class);
                     
+                    // 校验参数
+                    if (!req.has("nickname") || !req.has("email")) {
+                        sendErrorResponse(exchange, 400, "缺少昵称或邮箱参数");
+                        return;
+                    }
+                    
                     dbLock.lock();
                     try (PreparedStatement pstmt = db.prepareStatement(
                             "UPDATE users SET nickname = ?, email = ? WHERE id = ?")) {
-                        pstmt.setString(1, req.get("nickname").getAsString());
-                        pstmt.setString(2, req.get("email").getAsString());
+                        pstmt.setString(1, req.get("nickname").getAsString().trim());
+                        pstmt.setString(2, req.get("email").getAsString().trim());
                         pstmt.setInt(3, userInfo.userId);
                         pstmt.executeUpdate();
                         sendResponse(exchange, 200, Map.of("success", true, "message", "信息更新成功"));
@@ -405,8 +479,21 @@ public class HttpFileServer {
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
                 JsonObject req = gson.fromJson(br, JsonObject.class);
-                String oldPwd = req.get("oldPassword").getAsString();
-                String newPwd = req.get("newPassword").getAsString();
+                
+                // 校验参数
+                if (!req.has("oldPassword") || !req.has("newPassword")) {
+                    sendErrorResponse(exchange, 400, "缺少旧密码或新密码参数");
+                    return;
+                }
+                
+                String oldPwd = req.get("oldPassword").getAsString().trim();
+                String newPwd = req.get("newPassword").getAsString().trim();
+
+                // 新密码强度校验
+                if (newPwd.length() < 6) {
+                    sendErrorResponse(exchange, 400, "新密码至少6位");
+                    return;
+                }
 
                 dbLock.lock();
                 try {
@@ -428,7 +515,7 @@ public class HttpFileServer {
                     pstmt.setInt(2, userInfo.userId);
                     pstmt.executeUpdate();
                     
-                    sendResponse(exchange, 200, Map.of("success", true, "message", "密码修改成功"));
+                    sendResponse(exchange, 200, Map.of("success", true, "message", "密码修改成功，请重新登录"));
                 } finally {
                     dbLock.unlock();
                 }
@@ -460,11 +547,17 @@ public class HttpFileServer {
                     sendErrorResponse(exchange, 400, "缺少参数：username");
                     return;
                 }
-                String targetUsername = req.get("username").getAsString();
+                String targetUsername = req.get("username").getAsString().trim();
 
                 // 禁止删除管理员账户
                 if ("admin".equals(targetUsername)) {
                     sendErrorResponse(exchange, 400, "禁止删除管理员账户");
+                    return;
+                }
+
+                // 禁止删除自己
+                if (targetUsername.equals(userInfo.username)) {
+                    sendErrorResponse(exchange, 400, "禁止删除当前登录账户");
                     return;
                 }
 
@@ -775,6 +868,12 @@ public class HttpFileServer {
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
                 JsonObject req = gson.fromJson(br, JsonObject.class);
+                
+                if (!req.has("fileId")) {
+                    sendErrorResponse(exchange, 400, "缺少参数：fileId");
+                    return;
+                }
+                
                 int fileId = req.get("fileId").getAsInt();
 
                 dbLock.lock();
@@ -813,7 +912,7 @@ public class HttpFileServer {
         }
     }
 
-    // 文件下载接口
+    // 文件下载接口（强化CORS配置）
     static class FileDownloadHandler extends AbstractTokenHandler {
         @Override
         protected void handleWithAuth(HttpExchange exchange) throws IOException {
@@ -870,6 +969,11 @@ public class HttpFileServer {
                     return;
                 }
 
+                // 强化CORS头，确保下载跨域无问题
+                exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+                
                 // 发送文件流（纯字节传输，无编码转换）
                 exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
                 exchange.getResponseHeaders().set("Content-Disposition", 
@@ -952,7 +1056,8 @@ public class HttpFileServer {
                         "data", Map.of(
                                 "filename", filename,
                                 "content", content.substring(0, Math.min(1024, content.length())),
-                                "totalSize", filesize
+                                "totalSize", filesize,
+                                "previewTip", "仅显示前1KB内容，完整内容请下载"
                         )
                 ));
             } catch (Exception e) {
@@ -966,7 +1071,7 @@ public class HttpFileServer {
         private boolean isTextFile(String filename, Path filePath) throws IOException {
             // 1. 优先通过后缀判断
             String lowerFilename = filename.toLowerCase();
-            String[] textExtensions = {".txt", ".java", ".html", ".json", ".xml", ".css", ".js", ".md"};
+            String[] textExtensions = {".txt", ".java", ".html", ".json", ".xml", ".css", ".js", ".md", ".json", ".csv"};
             for (String ext : textExtensions) {
                 if (lowerFilename.endsWith(ext)) {
                     return true;
@@ -1040,6 +1145,12 @@ public class HttpFileServer {
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
                 JsonObject req = gson.fromJson(br, JsonObject.class);
+                
+                if (!req.has("fileId")) {
+                    sendErrorResponse(exchange, 400, "缺少参数：fileId");
+                    return;
+                }
+                
                 int fileId = req.get("fileId").getAsInt();
 
                 dbLock.lock();

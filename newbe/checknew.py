@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# 全局配置（与Java服务器对应）
+# 全局配置（与Java服务器严格对齐）
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 3000
 TEST_USER = {
@@ -18,7 +18,7 @@ TEST_USER = {
 }
 ADMIN_USER = {
     "username": "admin",
-    "password": "admin"  # Java服务器默认管理员密码
+    "password": "admin123"  # 与Java后端管理员密码完全对齐
 }
 TEST_FILE_PATH = "test_upload.txt"  # 测试上传文件
 TEST_FILE_CONTENT = "This is a test file for Java File Server."
@@ -398,15 +398,15 @@ class FileServerTester:
             self._print_result(step, False, f"删除失败: {delete_resp['data']}")
             return False
 
-        # 6.2 验证用户已被删除（尝试用原Token访问）
+        # 6.2 验证用户已删除（用户删除后，原Token访问应触发401或404，均为预期）
         step = "验证用户已删除"
         profile_resp = self._send_request("GET", "/user/profile")
         actual_status = profile_resp.get("status_code", "未知")
 
-        # 两种情况均视为用户已删除
-        if actual_status == 401 or actual_status == 999:
+        # 401（未认证）或404（资源不存在）均视为用户已成功删除
+        if actual_status in [401, 404, 999]:
             self._print_result(step, True, f"用户已删除（状态码: {actual_status}，符合预期）")
-            return True  # 关键修复：成功时必须返回True，让脚本继续执行
+            return True
         else:
             self._print_result(step, False, f"用户未被正确删除，状态码: {actual_status}")
             return False
