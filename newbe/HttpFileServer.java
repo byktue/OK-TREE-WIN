@@ -569,8 +569,13 @@ public class HttpFileServer {
                         response.put("success", true);
                         response.put("code", 200);
                         response.put("message", "登录成功");
+                        // 兼容旧客户端同时返回 top-level token
                         response.put("token", token);
-                        response.put("data", userData);
+                        // 将 token 与 user 一并放入 data 下，前端期望 data.token 和 data.user
+                        Map<String, Object> dataWrapper = new HashMap<>();
+                        dataWrapper.put("token", token);
+                        dataWrapper.put("user", userData);
+                        response.put("data", dataWrapper);
                         sendResponse(exchange, 200, response);
                         logger.info("用户登录成功：" + username);
                     } else {
@@ -592,7 +597,7 @@ public class HttpFileServer {
         private void setCorsHeaders(HttpExchange exchange) {
             exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, Authorization");
             exchange.getResponseHeaders().set("Access-Control-Max-Age", "86400");
         }
 
@@ -702,7 +707,7 @@ public class HttpFileServer {
         private void setCorsHeaders(HttpExchange exchange) {
             exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, Authorization");
             exchange.getResponseHeaders().set("Access-Control-Max-Age", "86400");
         }
 
