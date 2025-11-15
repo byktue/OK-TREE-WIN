@@ -101,16 +101,23 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const response = await fetch(CONFIG.API_URL, {
                 method: 'POST',
+                mode: 'cors', // 明确使用 CORS 模式
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
                 body: JSON.stringify(loginData),
                 signal: controller.signal,
-                credentials: 'include'
+                // 移除 credentials: 'include'，避免与后端 Access-Control-Allow-Origin: * 冲突
+                // 如果需要发送凭据，后端必须返回具体 Origin 并设置 Access-Control-Allow-Credentials: true
+                credentials: 'omit'
             });
 
             clearTimeout(timeoutId);
-            console.log('登录响应头：', Object.fromEntries(response.headers));
+            // response.headers 是 Headers 对象，转换为普通对象便于查看
+            const headersObj = {};
+            response.headers.forEach((v, k) => { headersObj[k] = v; });
+            console.log('登录响应头：', headersObj);
 
             let result;
             try {
@@ -126,11 +133,19 @@ document.addEventListener('DOMContentLoaded', function() {
             if (result.success === undefined) result.success = false;
             if (!result.message) result.message = result.success ? '登录成功' : '登录失败';
 
+            // 强化响应格式检查：允许后端直接返回 { token, user } 或 包在 data 里
             if (!isValidLoginResponse(result)) {
-                result = {
-                    success: false,
-                    message: '服务器返回数据格式错误'
-                };
+                // 兼容少数后端返回格式
+                if (result.token && result.user) {
+                    result = { success: true, data: { token: result.token, user: result.user } };
+                } else if (result.data && (result.data.token || result.data.user)) {
+                    // keep as-is
+                } else {
+                    result = {
+                        success: false,
+                        message: '服务器返回数据格式错误'
+                    };
+                }
             }
 
             return { result, response };

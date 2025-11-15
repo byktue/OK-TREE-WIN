@@ -214,6 +214,8 @@ public class HttpFileServer {
         server.createContext("/api/files", new LoggingHandler(new FileListHandler()));
         server.createContext("/api/files/upload", new LoggingHandler(new FileUploadHandler()));
         server.createContext("/api/files/delete", new LoggingHandler(new FileDeleteHandler()));
+    // 永久删除单个文件（前端请求时将文件从回收站中永久移除）
+    server.createContext("/api/files/permanent-delete", new LoggingHandler(new FilePermanentDeleteHandler()));
         server.createContext("/api/files/download", new LoggingHandler(new FileDownloadHandler()));
         server.createContext("/api/files/preview", new LoggingHandler(new FilePreviewHandler()));
         server.createContext("/api/recycle-bin", new LoggingHandler(new RecycleBinHandler()));
@@ -1367,6 +1369,87 @@ public class HttpFileServer {
             } catch (Exception e) {
                 logger.severe("删除文件异常：" + e.getMessage());
                 sendErrorResponse(exchange, 500, "文件删除失败：" + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 单文件永久删除接口（POST）
+     * 说明：仅允许删除属于当前用户且已在回收站（is_deleted=1）的文件。
+     */
+    static class FilePermanentDeleteHandler extends AbstractTokenHandler {
+        @Override
+        protected void handleWithAuth(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendErrorResponse(exchange, 405, "只支持POST方法");
+                return;
+            }
+
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+                JsonObject req = gson.fromJson(br, JsonObject.class);
+                if (req == null || !req.has("fileId")) {
+                    sendErrorResponse(exchange, 400, "缺少参数：fileId");
+                    return;
+                }
+
+                int fileId = req.get("fileId").getAsInt();
+
+                dbLock.lock();
+                try {
+                    // 查询文件路径与状态
+                    try (PreparedStatement pstmt = db.prepareStatement(
+                            "SELECT filepath, is_deleted FROM files WHERE id = ? AND uploader_id = ?")) {
+                        pstmt.setInt(1, fileId);
+                        pstmt.setInt(2, userInfo.userId);
+                        try (ResultSet rs = pstmt.executeQuery()) {
+                            if (!rs.next()) {
+                                sendErrorResponse(exchange, 404, "文件不存在或无权限");
+                                return;
+                            }
+                            String filepath = rs.getString("filepath");
+                            int isDeleted = rs.getInt("is_deleted");
+
+                            if (isDeleted != 1) {
+                                sendErrorResponse(exchange, 400, "文件未在回收站中，不能永久删除");
+                                return;
+                            }
+
+                            // 删除物理文件
+                            Path path = Paths.get(filepath);
+                            try {
+                                if (Files.exists(path)) {
+                                    Files.delete(path);
+                                    logger.info("已删除物理文件：" + filepath);
+                                } else {
+                                    logger.info("物理文件不存在，跳过删除：" + filepath);
+                                }
+                            } catch (IOException ex) {
+                                logger.warning("删除物理文件失败：" + ex.getMessage());
+                                // 继续尝试删除数据库记录
+                            }
+
+                            // 删除数据库记录
+                            try (PreparedStatement delStmt = db.prepareStatement(
+                                    "DELETE FROM files WHERE id = ?")) {
+                                delStmt.setInt(1, fileId);
+                                int affected = delStmt.executeUpdate();
+                                Map<String, Object> resp = new HashMap<>();
+                                resp.put("deleted", affected);
+                                sendSuccessResponse(exchange, resp);
+                                logger.info("永久删除文件记录，fileId=" + fileId + ", 用户=" + userInfo.username);
+                                return;
+                            }
+                        }
+                    }
+                } catch (SQLException e) {
+                    logger.severe("永久删除文件异常：" + e.getMessage());
+                    sendErrorResponse(exchange, 500, "永久删除失败：" + e.getMessage());
+                } finally {
+                    dbLock.unlock();
+                }
+            } catch (Exception e) {
+                logger.severe("永久删除接口异常：" + e.getMessage());
+                sendErrorResponse(exchange, 500, "服务器内部错误");
             }
         }
     }

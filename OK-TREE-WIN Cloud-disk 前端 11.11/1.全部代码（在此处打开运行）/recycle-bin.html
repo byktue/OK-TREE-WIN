@@ -373,42 +373,31 @@
                         this.sidebarOpen = true;
                     }
                 },
-                // 加载回收站文件
-                loadRecycleFiles() {
-                    // 模拟API请求
-                    const token = localStorage.getItem('cloudDiskToken');
-                    setTimeout(() => {
-                        this.recycleFiles = [
-                            {
-                                id: 5,
-                                name: '旧项目资料',
-                                isFolder: true,
-                                originalPath: '/工作文档',
-                                deleteTime: '2023-10-10T14:30:00',
-                                type: 'folder'
-                            },
-                            {
-                                id: 6,
-                                name: '备份数据.xlsx',
-                                isFolder: false,
-                                originalPath: '/',
-                                deleteTime: '2023-10-09T09:15:00',
-                                type: 'document',
-                                size: 856000
-                            },
-                            {
-                                id: 7,
-                                name: '截图202309.png',
-                                isFolder: false,
-                                originalPath: '/图片',
-                                deleteTime: '2023-10-05T16:40:00',
-                                type: 'image',
-                                size: 1240000
-                            }
-                        ];
+                // 加载回收站文件（调用后端 /api/recycle-bin）
+                async loadRecycleFiles() {
+                    try {
+                        const res = await CloudApi.apiGet('/recycle-bin');
+                        let list = [];
+                        if (res && res.success && Array.isArray(res.data)) {
+                            list = res.data;
+                        } else if (Array.isArray(res)) {
+                            list = res;
+                        }
+                        // map 后端字段到前端显示字段
+                        this.recycleFiles = list.map(f => ({
+                            id: f.id || f.file_id || f.fileId,
+                            name: f.filename || f.name || f.file_name,
+                            isFolder: f.isFolder || false,
+                            originalPath: f.original_path || f.originalPath || '/',
+                            deleteTime: f.delete_time || f.deleteTime || new Date().toISOString(),
+                            type: f.file_type || f.type || 'file',
+                            size: f.filesize || f.size || 0
+                        }));
                         this.calculateTotalSize();
                         this.sortFiles();
-                    }, 500);
+                    } catch (e) {
+                        console.error('加载回收站失败', e);
+                    }
                 },
                 // 计算总大小
                 calculateTotalSize() {
@@ -429,65 +418,75 @@
                         return 0;
                     });
                 },
-                // 还原单个文件
-                restoreFile(fileId) {
-                    if (confirm('确定要还原此文件吗？')) {
-                        // 模拟API请求
-                        setTimeout(() => {
+                // 还原单个文件（调用后端 /api/recycle-bin/restore）
+                async restoreFile(fileId) {
+                    if (!confirm('确定要还原此文件吗？')) return;
+                    try {
+                        const res = await CloudApi.apiPost('/recycle-bin/restore', { fileId });
+                        if (res && res.success) {
                             this.recycleFiles = this.recycleFiles.filter(file => file.id !== fileId);
                             this.selectedFiles = this.selectedFiles.filter(id => id !== fileId);
                             this.calculateTotalSize();
                             alert('文件已还原到原位置');
-                        }, 300);
+                        } else {
+                            alert(res.message || '还原失败');
+                        }
+                    } catch (e) {
+                        console.error('还原失败', e);
+                        alert('还原失败，请稍后重试');
                     }
                 },
-                // 还原选中文件
-                restoreSelected() {
+                // 还原选中文件（循环调用还原接口）
+                async restoreSelected() {
                     if (this.selectedFiles.length === 0) return;
-                    
-                    if (confirm(`确定要还原选中的 ${this.selectedFiles.length} 个文件吗？`)) {
-                        // 模拟API请求
-                        setTimeout(() => {
-                            this.recycleFiles = this.recycleFiles.filter(file => !this.selectedFiles.includes(file.id));
-                            this.selectedFiles = [];
-                            this.calculateTotalSize();
-                            alert('选中的文件已还原到原位置');
-                        }, 300);
+                    if (!confirm(`确定要还原选中的 ${this.selectedFiles.length} 个文件吗？`)) return;
+                    try {
+                        for (const id of [...this.selectedFiles]) {
+                            const res = await CloudApi.apiPost('/recycle-bin/restore', { fileId: id });
+                            if (res && res.success) {
+                                this.recycleFiles = this.recycleFiles.filter(f => f.id !== id);
+                                this.selectedFiles = this.selectedFiles.filter(x => x !== id);
+                            } else {
+                                console.warn('还原失败：', id, res && res.message);
+                            }
+                        }
+                        this.calculateTotalSize();
+                        alert('选中的文件已还原（可能部分失败，请查看控制台）');
+                    } catch (e) {
+                        console.error('批量还原失败', e);
+                        alert('还原过程中发生错误，请稍后重试');
                     }
                 },
                 // 永久删除单个文件
+                // 注意：后端当前没有提供单文件永久删除接口，提供的是清空回收站（全部永久删除）。
+                // 因此此处引导用户使用“清空回收站”或与后端协商添加单文件删除接口。
                 deletePermanently(fileId) {
-                    if (confirm('确定要永久删除此文件吗？此操作不可恢复！')) {
-                        // 模拟API请求
-                        setTimeout(() => {
-                            this.recycleFiles = this.recycleFiles.filter(file => file.id !== fileId);
-                            this.selectedFiles = this.selectedFiles.filter(id => id !== fileId);
-                            this.calculateTotalSize();
-                        }, 300);
-                    }
+                    if (!confirm('后端未提供单文件永久删除接口。要永久删除该文件，请选择“清空回收站”（将删除所有回收站文件）。确定继续？')) return;
+                    // 直接调用清空回收站（警告：会删除全部回收站内容）
+                    this.emptyRecycleBin();
                 },
-                // 永久删除选中文件
+                // 永久删除选中文件（后端无单文件永久删除接口，改为清空回收站）
                 deletePermanentlySelected() {
                     if (this.selectedFiles.length === 0) return;
-                    
-                    if (confirm(`确定要永久删除选中的 ${this.selectedFiles.length} 个文件吗？此操作不可恢复！`)) {
-                        // 模拟API请求
-                        setTimeout(() => {
-                            this.recycleFiles = this.recycleFiles.filter(file => !this.selectedFiles.includes(file.id));
-                            this.selectedFiles = [];
-                            this.calculateTotalSize();
-                        }, 300);
-                    }
+                    if (!confirm('后端不支持针对选中文件的永久删除。要永久删除，请选择清空回收站（将删除所有回收站文件）。确定继续？')) return;
+                    this.emptyRecycleBin();
                 },
-                // 清空回收站
-                emptyRecycleBin() {
-                    if (confirm('确定要清空回收站吗？所有文件将被永久删除，此操作不可恢复！')) {
-                        // 模拟API请求
-                        setTimeout(() => {
+                // 清空回收站（调用后端 /api/recycle-bin/empty）
+                async emptyRecycleBin() {
+                    if (!confirm('确定要清空回收站吗？所有文件将被永久删除，此操作不可恢复！')) return;
+                    try {
+                        const res = await CloudApi.apiPost('/recycle-bin/empty', {});
+                        if (res && res.success) {
                             this.recycleFiles = [];
                             this.selectedFiles = [];
                             this.calculateTotalSize();
-                        }, 500);
+                            alert('回收站已清空');
+                        } else {
+                            alert(res.message || '清空回收站失败');
+                        }
+                    } catch (e) {
+                        console.error('清空回收站失败', e);
+                        alert('清空回收站出错，请稍后重试');
                     }
                 },
                 // 导航到文件管理器

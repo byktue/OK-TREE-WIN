@@ -134,6 +134,7 @@
 
     <!-- 2. 修复Vue开发版警告：替换为生产版CDN -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="api.js"></script>
     <script>
         // 登录状态验证（与file-manager.html保持一致）
         const token = localStorage.getItem('cloudDiskToken');
@@ -280,28 +281,34 @@
 
                     this.isUploading = true;
 
-                    // 模拟上传进度（实际项目替换为后端API调用）
-                    this.uploadingFiles.forEach((file, index) => {
-                        let progress = 0;
-                        const interval = setInterval(() => {
-                            progress += Math.random() * 10;
-                            if (progress >= 100) {
-                                progress = 100;
-                                clearInterval(interval);
+                    // 真实调用后端上传接口（并发上传）
+                    const uploads = this.uploadingFiles.map((file, idx) => {
+                        // each file expected to have rawFile property (实际选择时设置)
+                        const raw = file.rawFile || file.file || null;
+                        if (!raw) {
+                            return Promise.reject(new Error('缺少原始文件：' + file.name));
+                        }
+                        return CloudApi.uploadFile('/files/upload', raw, (p) => {
+                            this.uploadingFiles[idx].progress = p;
+                        }).then(res => ({ res, idx }));
+                    });
 
-                                // 最后一个文件上传完成后跳转回文件管理页
-                                if (index === this.uploadingFiles.length - 1) {
-                                    setTimeout(() => {
-                                        this.isUploading = false;
-                                        this.uploadingFiles = [];
-                                        this.goBack(); // 上传完成后刷新原目录
-                                    }, 500);
-                                }
-                            }
-
-                            // 更新进度（Vue响应式更新）
-                            this.uploadingFiles[index].progress = Math.floor(progress);
-                        }, 300);
+                    Promise.allSettled(uploads).then(results => {
+                        this.isUploading = false;
+                        const failed = results.filter(r => r.status === 'rejected');
+                        if (failed.length > 0) {
+                            this.errorMsg = '部分文件上传失败，请重试';
+                            console.error('上传失败项：', failed);
+                        } else {
+                            // 上传成功，通知父组件并关闭模态框
+                            this.uploadingFiles = [];
+                            this.$emit('upload-complete');
+                            this.$emit('close');
+                        }
+                    }).catch(e=>{
+                        console.error('上传出错', e);
+                        this.isUploading = false;
+                        this.errorMsg = '上传过程中发生错误';
                     });
                 }
             }

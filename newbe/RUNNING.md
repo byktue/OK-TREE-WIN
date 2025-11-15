@@ -1,3 +1,17 @@
+```bash
+mvn clean package -DskipTests
+```
+
+编译
+```bash
+javac -cp ".\lib\*;." -d .\out HttpFileServer.java
+```
+
+运行
+```bash
+java -cp ".\lib\*;.\out" HttpFileServer
+```
+
 
 # 快速运行说明（精简版）
 

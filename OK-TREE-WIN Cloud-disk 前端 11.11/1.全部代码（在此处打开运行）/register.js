@@ -2,7 +2,8 @@
 document.addEventListener('DOMContentLoaded', function() {
     // 配置常量（保持原有，贴合后端接口地址）
     const CONFIG = {
-        API_URL: 'http://localhost:3000/api/register', // 后端注册接口地址
+        // 与后端 HttpFileServer 对齐的注册接口
+        API_URL: 'http://localhost:3000/api/auth/register',
         TIMEOUT: 10000, // 10秒超时
         MAX_RETRIES: 1, // 注册接口无需多次重试，改为1次
         RETRY_DELAY: 1000 // 重试延迟(ms)
@@ -214,28 +215,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
             clearTimeout(timeoutId);
 
-            // 核心优化：后端错误响应（如400）也返回 JSON 格式（success: false, message: "用户名已存在"）
             const result = await response.json();
-            
-            // 验证响应格式
             if (!isValidResponse(result)) {
                 throw new Error('服务器返回数据格式错误');
             }
-            
-            // 即使HTTP状态码非200，也返回结果（由上层判断success）
             return result;
-            
         } catch (error) {
             if (error.name === 'AbortError') {
                 throw new Error('请求超时，请检查网络连接');
             }
-            
-            // 网络错误时使用模拟数据（保持原有，包含用户名已存在场景）
-            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-                console.warn('网络连接失败，使用模拟数据进行测试');
-                return simulateBackendResponse(userData);
-            }
-            
+            // 只显示错误提示，不走模拟数据
             throw error;
         }
     }
@@ -301,25 +290,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 模拟后端响应（保持原有，强化用户名已存在场景）
     function simulateBackendResponse(userData) {
-        return new Promise(resolve => {
-            setTimeout(() => {
-                // 模拟用户名重复（后端核心错误场景）
-                const existingUsers = ['admin', 'test', 'user123', 'root', 'guest'];
-                if (existingUsers.includes(userData.username)) {
-                    resolve({
-                        success: false,
-                        message: '用户名已存在' // 与后端提示文案一致
-                    });
-                    return;
-                }
-                
-                // 模拟注册成功
-                resolve({
-                    success: true,
-                    message: '注册成功'
-                });
-            }, 1000);
-        });
+        // 已禁用模拟数据，始终真实发往后端
+        return Promise.reject(new Error('网络连接失败，无法注册'));
     }
 
     // 显示错误信息（保持原有）

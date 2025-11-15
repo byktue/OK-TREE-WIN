@@ -9,6 +9,7 @@
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <!-- 生产环境建议：替换为 vue.global.prod.js（消除Vue开发版警告） -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="api.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -284,8 +285,14 @@
                     window.location.href = 'file-manager.html';
                 },
                 // 处理下载（模拟逻辑，实际调用后端API）
-                handleDownload() {
-                    alert(`正在下载：${this.file.name}\n实际项目中调用 /api/download?fileId=${this.file.id}`);
+                async handleDownload() {
+                    if (!this.file || !this.file.id) return;
+                    try {
+                        await CloudApi.apiDownload(`/files/download?id=${encodeURIComponent(this.file.id)}`, this.file.name);
+                    } catch (e) {
+                        console.error('下载失败', e);
+                        alert('下载失败，请稍后重试');
+                    }
                 },
                 // 处理分享（模拟逻辑）
                 handleShare() {
