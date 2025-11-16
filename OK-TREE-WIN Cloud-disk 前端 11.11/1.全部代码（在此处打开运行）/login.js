@@ -288,12 +288,30 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function checkLoginStatus() {
+    async function checkLoginStatus() {
         const token = localStorage.getItem(CONFIG.TOKEN_KEY);
-        const user = localStorage.getItem(CONFIG.USER_KEY);
-        if (token && user) {
-            console.log('已登录，直接跳转');
-            window.location.href = 'file-manager.html';
+        if (!token) {
+            return; // 没有 token，停留在登录页
+        }
+
+        console.log('发现本地 Token，正在验证...');
+        try {
+            // 使用 CloudApi 来验证 token 有效性，例如请求用户信息
+            // 这个请求会自动携带 token
+            const response = await CloudApi.apiGet('/user/profile');
+            
+            if (response && response.success) {
+                console.log('Token 验证成功，直接跳转');
+                window.location.href = 'file-manager.html';
+            } else {
+                console.log('Token 无效或已过期，清除本地存储');
+                localStorage.removeItem(CONFIG.TOKEN_KEY);
+                localStorage.removeItem(CONFIG.USER_KEY);
+            }
+        } catch (error) {
+            console.error('Token 验证失败:', error);
+            localStorage.removeItem(CONFIG.TOKEN_KEY);
+            localStorage.removeItem(CONFIG.USER_KEY);
         }
     }
 
