@@ -17,7 +17,7 @@ import com.sun.net.httpserver.HttpExchange;
 import java.nio.charset.StandardCharsets;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
-
+import java.security.Key;
 import java.security.spec.KeySpec;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
@@ -43,7 +43,7 @@ public class HttpFileServer {
     // JWT安全配置（生产环境建议使用环境变量注入）
     private static final String JWT_SECRET = System.getenv("JWT_SECRET") != null ? 
         System.getenv("JWT_SECRET") : "x8V2#zQ9!pL7@wK3$rT5*yB1&mN4%vF6^gH8(jU0)tR2";
-    private static final long JWT_EXPIRE = 24 * 60 * 60 * 1000; // 24小时过期（安全最佳实践）
+    private static final long JWT_EXPIRE = 24 * 60 * 60 * 1000; // 2小时过期（安全最佳实践）
     private static final Key JWT_KEY = Keys.hmacShaKeyFor(JWT_SECRET.getBytes(StandardCharsets.UTF_8));
 
     // 数据库与锁配置
@@ -1067,24 +1067,8 @@ public class HttpFileServer {
 
     /**
      * 文件上传接口（POST，支持multipart/form-data）
-     */// ... existing code ...
-    /**
-     * 文件上传接口（POST，支持multipart/form-data）
-     * [已重构] 采用健壮的字节流解析，修复了原先将二进制转为字符串导致的上传失败问题
      */
     static class FileUploadHandler extends AbstractTokenHandler {
-
-        // 用于封装解析结果的辅助内部类
-        private static class ParsedFilePart {
-            final String filename;
-            final byte[] content;
-
-            ParsedFilePart(String filename, byte[] content) {
-                this.filename = filename;
-                this.content = content;
-            }
-        }
-
         @Override
         protected void handleWithAuth(HttpExchange exchange) throws IOException {
             if (!"POST".equals(exchange.getRequestMethod())) {
@@ -1092,13 +1076,14 @@ public class HttpFileServer {
                 return;
             }
 
-            // 校验Content-Type并解析boundary
+            // 校验Content-Type
             String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
             if (contentType == null || !contentType.startsWith("multipart/form-data")) {
                 sendErrorResponse(exchange, 400, "无效的请求格式，需为multipart/form-data");
                 return;
             }
 
+            // 解析boundary
             String boundary = extractBoundary(contentType);
             if (boundary == null) {
                 sendErrorResponse(exchange, 400, "无法解析multipart边界");
@@ -1113,38 +1098,34 @@ public class HttpFileServer {
                     return;
                 }
 
-                // 使用新的健壮的解析方法，直接从字节流中提取文件名和内容
-                ParsedFilePart part = parseFirstFilePart(fullBody, boundary);
-                if (part == null || part.filename == null || part.content == null) {
-                    sendErrorResponse(exchange, 400, "无法解析文件内容，请检查请求格式");
-                    return;
-                }
-                String originalFilename = part.filename;
-                byte[] fileContent = part.content;
-
-                // --- 后续逻辑保持不变，但现在基于正确解析的文件内容 ---
-
-                // 校验文件名和文件内容
+                // 提取文件名和文件内容
+                String originalFilename = extractFilename(fullBody, boundary);
                 if (!isValidFilename(originalFilename)) {
                     sendErrorResponse(exchange, 400, "文件名不合法（含特殊字符或路径穿越）");
                     return;
                 }
-                if (fileContent.length == 0) {
+
+                // 提取文件内容
+                byte[] fileContent = extractFileContent(fullBody, boundary);
+                if (fileContent == null || fileContent.length == 0) {
                     sendErrorResponse(exchange, 400, "文件内容为空");
                     return;
                 }
+
+                // 校验文件大小
                 if (fileContent.length > MAX_UPLOAD_SIZE) {
                     sendErrorResponse(exchange, 400, "文件过大，最大支持" + MAX_UPLOAD_SIZE / 1024 / 1024 + "MB");
                     return;
                 }
 
-                // 生成存储路径并写入文件
-                String fileExt = originalFilename.contains(".") ?
+                // 生成存储文件名（避免重复）
+                String fileExt = originalFilename.contains(".") ? 
                     originalFilename.substring(originalFilename.lastIndexOf(".")) : ".bin";
                 String storedFilename = System.currentTimeMillis() + "_" + UUID.randomUUID().toString() + fileExt;
                 String storedFilePath = UPLOAD_DIR + File.separator + storedFilename;
                 Path filePath = Paths.get(storedFilePath);
 
+                // 写入文件
                 Files.write(filePath, fileContent);
                 logger.info("文件写入成功：" + storedFilePath + "（大小：" + fileContent.length + "字节）");
 
@@ -1159,7 +1140,7 @@ public class HttpFileServer {
                 dbLock.lock();
                 try (PreparedStatement pstmt = db.prepareStatement(
                         "INSERT INTO files (filename, file_type, filepath, filesize, md5, uploader_id) " +
-                        "VALUES (?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+                        "VALUES (?, ?, ?, ?, ?, ?)")) {
                     pstmt.setString(1, originalFilename);
                     pstmt.setString(2, mimeType);
                     pstmt.setString(3, storedFilePath);
@@ -1168,19 +1149,9 @@ public class HttpFileServer {
                     pstmt.setInt(6, userInfo.userId);
                     pstmt.executeUpdate();
 
-                    // [优化] 使用 getGeneratedKeys() 获取新插入的ID，更标准
-                    int lastId;
-                    try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
-                        if (generatedKeys.next()) {
-                            lastId = generatedKeys.getInt(1);
-                        } else {
-                            throw new SQLException("创建文件失败，无法获取ID。");
-                        }
-                    }
-
                     // 响应结果
                     Map<String, Object> fileData = new HashMap<>();
-                    fileData.put("id", lastId);
+                    fileData.put("id", getLastInsertId());
                     fileData.put("originalFilename", originalFilename);
                     fileData.put("storedFilename", storedFilename);
                     fileData.put("fileType", mimeType);
@@ -1195,64 +1166,9 @@ public class HttpFileServer {
                 }
 
             } catch (Exception e) {
-                logger.log(Level.SEVERE, "文件上传异常", e); // 记录完整的异常堆栈
+                logger.severe("文件上传异常：" + e.getMessage());
                 sendErrorResponse(exchange, 500, "文件上传失败：" + e.getMessage());
             }
-        }
-
-        /**
-         * [新方法] 从字节流中解析第一个文件部分
-         */
-        private ParsedFilePart parseFirstFilePart(byte[] fullBody, String boundary) {
-            byte[] boundaryBytes = ("--" + boundary).getBytes(StandardCharsets.UTF_8);
-            byte[] crlfBytes = new byte[]{13, 10};
-            byte[] headerSeparator = new byte[]{13, 10, 13, 10};
-
-            // 1. 查找第一个边界
-            int boundaryIndex = indexOf(fullBody, boundaryBytes, 0);
-            if (boundaryIndex == -1) return null;
-
-            // 2. 查找头部结束位置
-            int headerEndIndex = indexOf(fullBody, headerSeparator, boundaryIndex);
-            if (headerEndIndex == -1) return null;
-
-            // 3. 提取头部并解析文件名
-            int headerStartIndex = boundaryIndex + boundaryBytes.length;
-            if (indexOf(fullBody, crlfBytes, headerStartIndex) == headerStartIndex) {
-                 headerStartIndex += crlfBytes.length;
-            }
-            byte[] headerBytes = Arrays.copyOfRange(fullBody, headerStartIndex, headerEndIndex);
-            String headers = new String(headerBytes, StandardCharsets.UTF_8);
-
-            String filename = null;
-            for (String line : headers.split("\\r\\n")) {
-                if (line.toLowerCase().startsWith("content-disposition:")) {
-                    for (String part : line.split(";")) {
-                        part = part.trim();
-                        if (part.toLowerCase().startsWith("filename=")) {
-                            filename = part.substring("filename=".length()).replace("\"", "");
-                            break;
-                        }
-                    }
-                }
-                if (filename != null) break;
-            }
-
-            if (filename == null) return null;
-
-            // 4. 提取文件内容
-            int contentStartIndex = headerEndIndex + headerSeparator.length;
-            int nextBoundaryIndex = indexOf(fullBody, boundaryBytes, contentStartIndex);
-            if (nextBoundaryIndex == -1) return null; // 没有结束边界
-
-            int contentEndIndex = nextBoundaryIndex;
-            // 回溯以移除边界前的CRLF
-            if (contentEndIndex >= 2 && fullBody[contentEndIndex - 2] == 13 && fullBody[contentEndIndex - 1] == 10) {
-                contentEndIndex -= 2;
-            }
-
-            byte[] content = Arrays.copyOfRange(fullBody, contentStartIndex, contentEndIndex);
-            return new ParsedFilePart(filename, content);
         }
 
         /**
@@ -1279,6 +1195,7 @@ public class HttpFileServer {
                 part = part.trim();
                 if (part.startsWith("boundary=")) {
                     String boundary = part.substring("boundary=".length()).trim();
+                    // 去除可能的引号
                     if (boundary.startsWith("\"") && boundary.endsWith("\"")) {
                         boundary = boundary.substring(1, boundary.length() - 1);
                     }
@@ -1286,6 +1203,73 @@ public class HttpFileServer {
                 }
             }
             return null;
+        }
+
+        /**
+         * 提取文件名
+         */
+        private String extractFilename(byte[] fullBody, String boundary) {
+            String bodyStr = new String(fullBody, StandardCharsets.UTF_8);
+            String[] lines = bodyStr.split("\r\n");
+            String boundaryDelimiter = "--" + boundary;
+
+            for (int i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith(boundaryDelimiter) && i < lines.length - 1) {
+                    // 查找包含filename的行
+                    for (int j = i + 1; j < lines.length; j++) {
+                        if (lines[j].contains("filename=")) {
+                            String[] parts = lines[j].split("filename=");
+                            if (parts.length >= 2) {
+                                String filename = parts[1].trim();
+                                // 去除引号
+                                if (filename.startsWith("\"") && filename.endsWith("\"")) {
+                                    filename = filename.substring(1, filename.length() - 1);
+                                }
+                                return filename;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        /**
+         * 提取文件内容字节流
+         */
+        private byte[] extractFileContent(byte[] fullBody, String boundary) {
+            String boundaryDelimiter = "--" + boundary;
+            String endBoundary = boundaryDelimiter + "--";
+            byte[] boundaryBytes = boundaryDelimiter.getBytes(StandardCharsets.UTF_8);
+            byte[] endBoundaryBytes = endBoundary.getBytes(StandardCharsets.UTF_8);
+            byte[] contentStartMarker = "\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+
+            // 查找内容起始位置
+            int startIndex = indexOf(fullBody, contentStartMarker, 0);
+            if (startIndex == -1) {
+                return null;
+            }
+            startIndex += contentStartMarker.length;
+
+            // 查找内容结束位置（优先找结束边界，再找普通边界）
+            int endIndex = indexOf(fullBody, endBoundaryBytes, startIndex);
+            if (endIndex == -1) {
+                endIndex = indexOf(fullBody, boundaryBytes, startIndex);
+            }
+            if (endIndex == -1) {
+                endIndex = fullBody.length;
+            } else {
+                // 去除结束边界前的换行符
+                if (endIndex >= 2 && fullBody[endIndex - 2] == '\r' && fullBody[endIndex - 1] == '\n') {
+                    endIndex -= 2;
+                }
+            }
+
+            // 提取内容
+            if (startIndex >= endIndex) {
+                return null;
+            }
+            return Arrays.copyOfRange(fullBody, startIndex, endIndex);
         }
 
         /**
@@ -1308,6 +1292,17 @@ public class HttpFileServer {
                 }
             }
             return -1;
+        }
+
+        /**
+         * 获取最后插入的ID（SQLite专用）
+         */
+        private int getLastInsertId() throws SQLException {
+            try (Statement stmt = db.createStatement()) {
+                ResultSet rs = stmt.executeQuery("SELECT last_insert_rowid()");
+                rs.next();
+                return rs.getInt(1);
+            }
         }
     }
 
