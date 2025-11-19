@@ -422,7 +422,7 @@
                     </div>
                 </div>
             `,
-            props: ['show'],
+            props: ['show', 'currentFolderId'],
             data() {
                 return {
                     uploadingFiles: [],
@@ -503,7 +503,8 @@
                     const uploads = this.uploadingFiles.map((file, idx) => {
                         const raw = file.rawFile || null;
                         if (!raw) return Promise.reject(new Error('缺少原始文件'));
-                        return CloudApi.uploadFile('/files/upload', raw, (p) => {
+                        const uploadPath = this.currentFolderId ? `/files/upload?parentId=${this.currentFolderId}` : '/files/upload';
+                        return CloudApi.uploadFile(uploadPath, raw, (p) => {
                             this.uploadingFiles[idx].progress = p;
                         }).then(r => ({ r, idx }));
                     });
@@ -702,9 +703,23 @@
                                         <button class="toolbar-btn-primary" @click="showUploadModal = true">
                                             <i class="fa fa-plus mr-1"></i> 上传文件
                                         </button>
-                                        <button class="toolbar-btn">
+                                        <button class="toolbar-btn" @click="showCreateFolderModal = true">
                                             <i class="fa fa-folder mr-1"></i> 新建文件夹
                                         </button>
+        <!-- 新建文件夹弹窗 -->
+        <div v-if="showCreateFolderModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-xl w-full max-w-md p-6">
+                <h3 class="text-lg font-medium mb-4">新建文件夹</h3>
+                <div class="mb-4">
+                    <input type="text" v-model="newFolderName" placeholder="请输入文件夹名称" class="w-full border rounded px-3 py-2" />
+                </div>
+                <div v-if="createFolderError" class="text-red-500 mb-2">{{ createFolderError }}</div>
+                <div class="flex justify-end gap-3">
+                    <button class="action-btn action-btn-secondary" @click="showCreateFolderModal = false">取消</button>
+                    <button class="action-btn action-btn-primary" @click="handleCreateFolder" :disabled="!newFolderName.trim()">创建</button>
+                </div>
+            </div>
+        </div>
                                     </div>
                                     
                                     <div class="flex items-center gap-3">
@@ -737,10 +752,19 @@
                             </div>
                             
                             <!-- 面包屑导航 -->
-                            <div class="text-sm mb-4">
-                                <span class="text-primary cursor-pointer hover:underline">全部文件</span>
-                                <i class="fa fa-angle-right text-gray-light mx-1"></i>
-                                <span>当前文件夹</span>
+                            <div class="text-sm mb-4 flex flex-wrap items-center gap-1">
+                                <template v-for="(crumb, index) in breadcrumbs" :key="(crumb.id ?? 'root') + '-' + index">
+                                    <span
+                                        :class="[
+                                            'cursor-pointer',
+                                            index === breadcrumbs.length - 1 ? 'text-dark font-medium' : 'text-primary hover:underline'
+                                        ]"
+                                        @click="index === breadcrumbs.length - 1 ? null : navigateToBreadcrumb(crumb, index)"
+                                    >
+                                        {{ crumb.name }}
+                                    </span>
+                                    <i v-if="index < breadcrumbs.length - 1" class="fa fa-angle-right text-gray-light mx-1"></i>
+                                </template>
                             </div>
                             
                             <!-- 文件列表/网格 -->
@@ -841,6 +865,7 @@
                     
                     <UploadModal 
                         :show="showUploadModal"
+                        :current-folder-id="currentFolderId"
                         @close="showUploadModal = false"
                         @upload-complete="handleUploadComplete"
                     ></UploadModal>
@@ -888,10 +913,17 @@
                     downloadFile: null,
                     showDeleteModal: false,
                     deleteFile: null,
+                    showCreateFolderModal: false,
+                    newFolderName: '',
+                    createFolderError: '',
                     usedStorage: '2.5',
                     totalStorage: '10',
                     isMobile: window.innerWidth < 768,
-                    files: []
+                    files: [],
+                    currentFolderId: null,
+                    breadcrumbs: [
+                        { id: null, name: '全部文件' }
+                    ]
                 };
             },
             computed: {
@@ -917,6 +949,29 @@
             methods: {
                 formatDate,
                 formatSize,
+                async handleCreateFolder() {
+                    if (!this.newFolderName.trim()) return;
+                    this.createFolderError = '';
+                    try {
+                        const res = await CloudApi.apiPost('/files/create-folder', {
+                            folderName: this.newFolderName.trim(),
+                            parentId: this.currentFolderId
+                        });
+                        const payload = res?.data || res;
+                        if (res && res.success !== false && (payload?.created || payload?.folder)) {
+                            this.showCreateFolderModal = false;
+                            this.newFolderName = '';
+                            this.fetchFiles(this.currentFolderId);
+                            alert('文件夹创建成功');
+                        } else if (res && res.message) {
+                            this.createFolderError = res.message;
+                        } else {
+                            this.createFolderError = '创建失败';
+                        }
+                    } catch (e) {
+                        this.createFolderError = e?.message || '创建失败';
+                    }
+                },
                 toggleSidebar() {
                     this.sidebarOpen = !this.sidebarOpen;
                 },
@@ -947,8 +1002,7 @@
                 },
                 handleFileClick(file) {
                     if (file.type === 'folder') {
-                        // 文件夹点击逻辑
-                        alert(`打开文件夹: ${file.name}`);
+                        this.openFolder(file);
                     } else {
                         this.handlePreview(file);
                     }
@@ -958,33 +1012,103 @@
                     this.showPreviewModal = true;
                     this.showActionMenu = false;
                 },
-                async fetchFiles() {
+                async fetchFiles(targetFolderId) {
+                    const paramProvided = arguments.length > 0;
+                    const folderIdToLoad = paramProvided ? targetFolderId : this.currentFolderId;
                     try {
-                        const res = await CloudApi.apiGet('/files');
+                        const query = folderIdToLoad !== null && folderIdToLoad !== undefined
+                            ? `?folderId=${folderIdToLoad}`
+                            : '';
+                        const res = await CloudApi.apiGet(`/files${query}`);
+                        const payload = res?.data || res || {};
                         let list = [];
-                        if (res && res.success && (res.data || res.files)) {
-                            list = res.data || res.files;
-                        } else if (Array.isArray(res)) {
-                            list = res;
-                        } else if (res && res.data && Array.isArray(res.data)) {
-                            list = res.data;
+                        if (Array.isArray(payload.files)) {
+                            list = payload.files;
+                        } else if (Array.isArray(payload)) {
+                            list = payload;
                         }
-                        this.files = list.map(f => ({
-                            id: f.id || f.file_id || f.fileId,
-                            name: f.filename || f.name || f.file_name,
-                            type: f.file_type || f.type || (f.filename && f.filename.split('.').pop()) || 'file',
-                            modifiedTime: f.upload_time || f.modifiedTime || f.updated_at || new Date().toISOString(),
-                            size: f.filesize || f.size || 0
-                        }));
+                        this.files = list.map(f => this.normalizeFileRecord(f));
+                        if (payload.currentFolder) {
+                            this.currentFolderId = payload.currentFolder.id ?? null;
+                        } else {
+                            this.currentFolderId = folderIdToLoad ?? null;
+                        }
+                        if (Array.isArray(payload.breadcrumbs) && payload.breadcrumbs.length) {
+                            const mapped = payload.breadcrumbs.map(b => ({
+                                id: Object.prototype.hasOwnProperty.call(b, 'id') ? b.id : null,
+                                name: b.name || '未命名'
+                            }));
+                            // 确保面包屑首元素始终是根目录
+                            if (!mapped.length || mapped[0].id !== null) {
+                                mapped.unshift({ id: null, name: '全部文件' });
+                            }
+                            this.breadcrumbs = mapped;
+                        } else {
+                            this.breadcrumbs = this.buildFallbackBreadcrumbs();
+                        }
                     } catch (e) {
                         console.error('获取文件列表失败', e);
+                        this.files = [];
+                        this.breadcrumbs = this.buildFallbackBreadcrumbs();
                     }
+                },
+
+                normalizeFileRecord(raw) {
+                    const id = raw?.id || raw?.file_id || raw?.fileId;
+                    const filename = raw?.filename || raw?.name || raw?.file_name || `未命名-${id || ''}`;
+                    const rawType = (raw?.file_type || raw?.fileType || raw?.type || '').toLowerCase();
+                    const normalizedType = rawType === 'folder' ? 'folder' : this.detectTypeFromName(filename, rawType);
+                    return {
+                        id,
+                        name: filename,
+                        type: normalizedType,
+                        modifiedTime: raw?.upload_time || raw?.uploadTime || raw?.modifiedTime || raw?.updated_at || new Date().toISOString(),
+                        size: raw?.filesize || raw?.fileSize || raw?.size || 0,
+                        parentId: raw?.parent_id ?? raw?.parentId ?? null
+                    };
+                },
+
+                detectTypeFromName(name, rawType) {
+                    if (rawType && rawType !== 'application/octet-stream' && rawType !== 'file') {
+                        return rawType;
+                    }
+                    const ext = (name || '').split('.').pop().toLowerCase();
+                    const map = {
+                        jpg: 'image', jpeg: 'image', png: 'image', gif: 'image',
+                        pdf: 'pdf', doc: 'doc', docx: 'doc', txt: 'doc', md: 'doc',
+                        mp4: 'video', mov: 'video', avi: 'video',
+                        mp3: 'audio', wav: 'audio'
+                    };
+                    return map[ext] || 'file';
+                },
+
+                buildFallbackBreadcrumbs() {
+                    const crumbs = [{ id: null, name: '全部文件' }];
+                    if (this.currentFolderId !== null && this.currentFolderId !== undefined) {
+                        crumbs.push({ id: this.currentFolderId, name: '当前文件夹' });
+                    }
+                    return crumbs;
+                },
+
+                openFolder(folder) {
+                    if (!folder || !folder.id) return;
+                    this.showActionMenu = false;
+                    this.selectedFile = null;
+                    this.fetchFiles(folder.id);
+                },
+
+                navigateToBreadcrumb(crumb, index) {
+                    if (index === this.breadcrumbs.length - 1) return;
+                    this.showActionMenu = false;
+                    this.selectedFile = null;
+                    const targetId = Object.prototype.hasOwnProperty.call(crumb || {}, 'id') ? crumb.id : null;
+                    this.fetchFiles(targetId);
                 },
 
                 async handleDownload(file) {
                     if (!file || !file.id) return;
                     try {
-                        await CloudApi.apiDownload(`/files/download?id=${encodeURIComponent(file.id)}`, file.name);
+                        await CloudApi.apiDownload(`/files/download?fileId=${encodeURIComponent(file.id)}`, file.name);
                     } catch (e) {
                         console.error('下载失败', e);
                         alert('下载失败，请稍后重试');
@@ -1007,7 +1131,7 @@
                     try {
                         const res = await CloudApi.apiPost('/files/delete', { fileIds: [this.deleteFile.id] });
                         if (res && res.success) {
-                            this.fetchFiles();
+                            this.fetchFiles(this.currentFolderId);
                             this.showDeleteModal = false;
                             alert('文件已移至回收站');
                         } else {
@@ -1021,7 +1145,7 @@
 
                 handleUploadComplete() {
                     // 上传完成后刷新文件列表
-                    this.fetchFiles();
+                    this.fetchFiles(this.currentFolderId);
                 }
             },
             mounted() {
@@ -1042,7 +1166,7 @@
                     }
                 });
                 // 初始加载真实文件列表
-                this.fetchFiles();
+                this.fetchFiles(null);
             }
         };
 

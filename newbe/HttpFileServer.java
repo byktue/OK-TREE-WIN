@@ -127,35 +127,41 @@ public class HttpFileServer {
         db.setAutoCommit(true);
 
         try (Statement stmt = db.createStatement()) {
-        // 用户表：移除 SQLite 不支持的 COMMENT 子句
-        stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-            "username TEXT UNIQUE NOT NULL, " +
-            "password TEXT NOT NULL, " +
-            "salt TEXT NOT NULL, " +
-            "nickname TEXT DEFAULT '', " +
-            "email TEXT, " +
-            "is_admin INTEGER DEFAULT 0, " +
-            "is_member INTEGER DEFAULT 0, " +
-            "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, " +
-            "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
-            
-        // 文件表：移除 SQLite 不支持的 COMMENT 子句与内联 INDEX，后续单独创建索引
-        stmt.execute("CREATE TABLE IF NOT EXISTS files (" +
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-            "filename TEXT NOT NULL, " +
-            "file_type TEXT, " +
-            "filepath TEXT UNIQUE NOT NULL, " +
-            "filesize INTEGER NOT NULL, " +
-            "md5 TEXT NOT NULL, " +
-            "uploader_id INTEGER NOT NULL, " +
-            "upload_time DATETIME DEFAULT CURRENT_TIMESTAMP, " +
-            "is_deleted INTEGER DEFAULT 0, " +
-            "delete_time DATETIME, " +
-            "FOREIGN KEY(uploader_id) REFERENCES users(id) ON DELETE CASCADE)");
+            // 用户表：移除 SQLite 不支持的 COMMENT 子句
+            stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "username TEXT UNIQUE NOT NULL, " +
+                "password TEXT NOT NULL, " +
+                "salt TEXT NOT NULL, " +
+                "nickname TEXT DEFAULT '', " +
+                "email TEXT, " +
+                "is_admin INTEGER DEFAULT 0, " +
+                "is_member INTEGER DEFAULT 0, " +
+                "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, " +
+                "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
 
-        // 为 files 表创建索引以优化查询（SQLite 单独创建索引）
-        stmt.execute("CREATE INDEX IF NOT EXISTS idx_uploader_deleted ON files(uploader_id, is_deleted)");
+            // 文件表：移除 SQLite 不支持的 COMMENT 子句与内联 INDEX，后续单独创建索引
+            stmt.execute("CREATE TABLE IF NOT EXISTS files (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "filename TEXT NOT NULL, " +
+                "file_type TEXT, " +
+                "filepath TEXT UNIQUE NOT NULL, " +
+                "filesize INTEGER NOT NULL, " +
+                "md5 TEXT NOT NULL, " +
+                "uploader_id INTEGER NOT NULL, " +
+                "parent_id INTEGER, " +
+                "upload_time DATETIME DEFAULT CURRENT_TIMESTAMP, " +
+                "is_deleted INTEGER DEFAULT 0, " +
+                "delete_time DATETIME, " +
+                "FOREIGN KEY(uploader_id) REFERENCES users(id) ON DELETE CASCADE, " +
+                "FOREIGN KEY(parent_id) REFERENCES files(id) ON DELETE CASCADE)");
+
+            // 兼容旧版本数据库（补充 parent_id 列）
+            ensureFilesParentColumn();
+
+            // 为 files 表创建索引以优化查询（SQLite 单独创建索引）
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_uploader_deleted ON files(uploader_id, is_deleted)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_files_parent ON files(parent_id)");
 
             // 初始化默认账户（密码加密存储）
             initDefaultAccounts(stmt);
@@ -189,6 +195,30 @@ public class HttpFileServer {
     }
 
     /**
+     * 兼容旧版本数据库：如果 files 表缺少 parent_id 列，则动态添加
+     */
+    private static void ensureFilesParentColumn() throws SQLException {
+        boolean hasParentId = false;
+        try (Statement stmt = db.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(files)")) {
+            while (rs.next()) {
+                String columnName = rs.getString("name");
+                if ("parent_id".equalsIgnoreCase(columnName)) {
+                    hasParentId = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasParentId) {
+            try (Statement alterStmt = db.createStatement()) {
+                alterStmt.execute("ALTER TABLE files ADD COLUMN parent_id INTEGER");
+                logger.info("旧版本数据表升级：files.parent_id 列已添加");
+            }
+        }
+    }
+
+    /**
      * 检查账户是否已存在
      */
     private static boolean accountExists(Statement stmt, String username) throws SQLException {
@@ -203,19 +233,19 @@ public class HttpFileServer {
      */
     private static void startHttpServer() throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-        
+
         // 无需认证的接口
         server.createContext("/api/auth/login", new LoggingHandler(new LoginHandler()));
         server.createContext("/api/auth/register", new LoggingHandler(new RegisterHandler()));
-        
+
         // 需要Token认证的接口
         server.createContext("/api/user/profile", new LoggingHandler(new UserProfileHandler()));
         server.createContext("/api/user/change-password", new LoggingHandler(new ChangePasswordHandler()));
         server.createContext("/api/files", new LoggingHandler(new FileListHandler()));
         server.createContext("/api/files/upload", new LoggingHandler(new FileUploadHandler()));
         server.createContext("/api/files/delete", new LoggingHandler(new FileDeleteHandler()));
-    // 永久删除单个文件（前端请求时将文件从回收站中永久移除）
-    server.createContext("/api/files/permanent-delete", new LoggingHandler(new FilePermanentDeleteHandler()));
+        server.createContext("/api/files/permanent-delete", new LoggingHandler(new FilePermanentDeleteHandler()));
+        server.createContext("/api/files/create-folder", new LoggingHandler(new CreateFolderHandler()));
         server.createContext("/api/files/download", new LoggingHandler(new FileDownloadHandler()));
         server.createContext("/api/files/preview", new LoggingHandler(new FilePreviewHandler()));
         server.createContext("/api/recycle-bin", new LoggingHandler(new RecycleBinHandler()));
@@ -236,6 +266,115 @@ public class HttpFileServer {
         server.start();
     }
 
+    /**
+     * 新建文件夹接口（POST）
+     * 请求参数：{"folderName": "xxx"}
+     * 仅在 files 表插入 file_type=folder 的记录，不创建物理目录
+     */
+    static class CreateFolderHandler extends AbstractTokenHandler {
+        @Override
+        protected void handleWithAuth(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendErrorResponse(exchange, 405, "只支持POST方法");
+                return;
+            }
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+                JsonObject req = gson.fromJson(br, JsonObject.class);
+                if (req == null || !req.has("folderName")) {
+                    sendErrorResponse(exchange, 400, "缺少参数：folderName");
+                    return;
+                }
+                String folderName = req.get("folderName").getAsString().trim();
+                Integer parentId = null;
+                if (req.has("parentId") && !req.get("parentId").isJsonNull()) {
+                    try {
+                        parentId = req.get("parentId").getAsInt();
+                    } catch (NumberFormatException ex) {
+                        sendErrorResponse(exchange, 400, "parentId 必须是数字");
+                        return;
+                    }
+                }
+
+                if (!isValidFilename(folderName)) {
+                    sendErrorResponse(exchange, 400, "文件夹名不合法");
+                    return;
+                }
+
+                FolderInfo parentFolder = null;
+                if (parentId != null) {
+                    try {
+                        parentFolder = getFolderInfo(parentId, userInfo.userId);
+                    } catch (SQLException ex) {
+                        logger.severe("查询上级文件夹失败：" + ex.getMessage());
+                        sendErrorResponse(exchange, 500, "查询上级文件夹失败");
+                        return;
+                    }
+                    if (parentFolder == null) {
+                        sendErrorResponse(exchange, 404, "上级文件夹不存在或无权限");
+                        return;
+                    }
+                }
+
+                dbLock.lock();
+                try {
+                    // 检查重名
+                    String duplicateSql = "SELECT COUNT(*) FROM files WHERE uploader_id = ? AND filename = ? AND is_deleted = 0 " +
+                        "AND file_type = 'folder' AND " + (parentId == null ? "parent_id IS NULL" : "parent_id = ?");
+                    try (PreparedStatement checkStmt = db.prepareStatement(duplicateSql)) {
+                        checkStmt.setInt(1, userInfo.userId);
+                        checkStmt.setString(2, folderName);
+                        if (parentId != null) {
+                            checkStmt.setInt(3, parentId);
+                        }
+                        ResultSet rs = checkStmt.executeQuery();
+                        if (rs.next() && rs.getInt(1) > 0) {
+                            sendErrorResponse(exchange, 409, "同名文件夹已存在");
+                            return;
+                        }
+                    }
+                    // 插入记录
+                    String fakePath = "folder://" + System.currentTimeMillis() + "_" + UUID.randomUUID();
+                    try (PreparedStatement pstmt = db.prepareStatement(
+                        "INSERT INTO files (filename, file_type, filepath, filesize, md5, uploader_id, parent_id) VALUES (?, 'folder', ?, 0, '', ?, ?)",
+                        Statement.RETURN_GENERATED_KEYS)) {
+                        pstmt.setString(1, folderName);
+                        pstmt.setString(2, fakePath);
+                        pstmt.setInt(3, userInfo.userId);
+                        if (parentId == null) {
+                            pstmt.setNull(4, Types.INTEGER);
+                        } else {
+                            pstmt.setInt(4, parentId);
+                        }
+                        int affected = pstmt.executeUpdate();
+                        int newId = -1;
+                        try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
+                            if (generatedKeys.next()) {
+                                newId = generatedKeys.getInt(1);
+                            }
+                        }
+                        Map<String, Object> resp = new HashMap<>();
+                        resp.put("created", affected);
+                        Map<String, Object> folderInfo = new HashMap<>();
+                        folderInfo.put("id", newId);
+                        folderInfo.put("name", folderName);
+                        folderInfo.put("parentId", parentId);
+                        resp.put("folder", folderInfo);
+                        sendSuccessResponse(exchange, resp);
+                        logger.info("新建文件夹：" + folderName + " 用户=" + userInfo.username);
+                        return;
+                    }
+                } catch (SQLException e) {
+                    logger.severe("新建文件夹异常：" + e.getMessage());
+                    sendErrorResponse(exchange, 500, "新建文件夹失败：" + e.getMessage());
+                } finally {
+                    dbLock.unlock();
+                }
+            } catch (Exception e) {
+                logger.severe("新建文件夹接口异常：" + e.getMessage());
+                sendErrorResponse(exchange, 500, "服务器内部错误");
+            }
+        }
+    }
     // -------------------------- 安全工具方法 --------------------------
     /**
      * 生成随机盐值（Base64编码）
@@ -304,6 +443,104 @@ public class HttpFileServer {
             sb.append(String.format("%02x", b));
         }
         return sb.toString();
+    }
+
+    /**
+     * 解析查询参数为Map
+     */
+    private static Map<String, String> parseQueryParams(String query) {
+        Map<String, String> params = new HashMap<>();
+        if (query == null || query.isEmpty()) {
+            return params;
+        }
+        String[] pairs = query.split("&");
+        for (String pair : pairs) {
+            if (pair == null || pair.isEmpty()) {
+                continue;
+            }
+            int idx = pair.indexOf('=');
+            if (idx <= 0 || idx == pair.length() - 1) {
+                continue;
+            }
+            String key = URLDecoder.decode(pair.substring(0, idx), StandardCharsets.UTF_8);
+            String value = URLDecoder.decode(pair.substring(idx + 1), StandardCharsets.UTF_8);
+            params.put(key, value);
+        }
+        return params;
+    }
+
+    /**
+     * 查询指定文件夹元信息（仅限当前用户）
+     */
+    private static FolderInfo getFolderInfo(int folderId, int ownerId) throws SQLException {
+        dbLock.lock();
+        try (PreparedStatement pstmt = db.prepareStatement(
+                "SELECT id, filename, parent_id FROM files WHERE id = ? AND uploader_id = ? AND is_deleted = 0 AND file_type = 'folder'")) {
+            pstmt.setInt(1, folderId);
+            pstmt.setInt(2, ownerId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    FolderInfo info = new FolderInfo();
+                    info.id = rs.getInt("id");
+                    info.name = rs.getString("filename");
+                    int parentValue = rs.getInt("parent_id");
+                    info.parentId = rs.wasNull() ? null : parentValue;
+                    return info;
+                }
+            }
+            return null;
+        } finally {
+            dbLock.unlock();
+        }
+    }
+
+    /**
+     * 根据当前文件夹构建面包屑路径
+     */
+    private static List<Map<String, Object>> buildBreadcrumbs(FolderInfo targetFolder, int ownerId) throws SQLException {
+        List<Map<String, Object>> breadcrumbs = new ArrayList<>();
+        Map<String, Object> root = new HashMap<>();
+        root.put("id", null);
+        root.put("name", "全部文件");
+        breadcrumbs.add(root);
+
+        if (targetFolder == null) {
+            return breadcrumbs;
+        }
+
+        Deque<FolderInfo> stack = new ArrayDeque<>();
+        FolderInfo cursor = targetFolder;
+        int guard = 0;
+        while (cursor != null && guard < 100) {
+            stack.push(cursor);
+            if (cursor.parentId == null) {
+                break;
+            }
+            cursor = getFolderInfo(cursor.parentId, ownerId);
+            guard++;
+        }
+
+        while (!stack.isEmpty()) {
+            breadcrumbs.add(stack.pop().toMap());
+        }
+        return breadcrumbs;
+    }
+
+    /**
+     * 文件夹元信息结构
+     */
+    private static class FolderInfo {
+        int id;
+        String name;
+        Integer parentId;
+
+        Map<String, Object> toMap() {
+            Map<String, Object> data = new HashMap<>();
+            data.put("id", id);
+            data.put("name", name);
+            data.put("parentId", parentId);
+            return data;
+        }
     }
 
     // -------------------------- JWT工具方法 --------------------------
@@ -1035,12 +1272,43 @@ public class HttpFileServer {
                 return;
             }
 
+            Map<String, String> queryParams = parseQueryParams(exchange.getRequestURI().getQuery());
+            Integer folderId = null;
+            if (queryParams.containsKey("folderId") && !queryParams.get("folderId").isBlank()) {
+                try {
+                    folderId = Integer.parseInt(queryParams.get("folderId"));
+                } catch (NumberFormatException e) {
+                    sendErrorResponse(exchange, 400, "folderId 必须是数字");
+                    return;
+                }
+            }
+
+            FolderInfo currentFolder = null;
+            if (folderId != null) {
+                try {
+                    currentFolder = getFolderInfo(folderId, userInfo.userId);
+                } catch (SQLException ex) {
+                    logger.severe("查询当前文件夹信息失败：" + ex.getMessage());
+                    sendErrorResponse(exchange, 500, "查询文件夹信息失败");
+                    return;
+                }
+                if (currentFolder == null) {
+                    sendErrorResponse(exchange, 404, "文件夹不存在或无权限");
+                    return;
+                }
+            }
+
             try {
                 dbLock.lock();
-                PreparedStatement pstmt = db.prepareStatement(
-                        "SELECT id, filename, file_type, filesize, upload_time FROM files " +
-                        "WHERE uploader_id = ? AND is_deleted = 0 ORDER BY upload_time DESC");
+                String sql = "SELECT id, filename, file_type, filesize, upload_time, parent_id FROM files " +
+                        "WHERE uploader_id = ? AND is_deleted = 0 AND " +
+                        (folderId == null ? "parent_id IS NULL " : "parent_id = ? ") +
+                        "ORDER BY CASE WHEN file_type = 'folder' THEN 0 ELSE 1 END, upload_time DESC";
+                PreparedStatement pstmt = db.prepareStatement(sql);
                 pstmt.setInt(1, userInfo.userId);
+                if (folderId != null) {
+                    pstmt.setInt(2, folderId);
+                }
                 ResultSet rs = pstmt.executeQuery();
 
                 List<Map<String, Object>> fileList = new ArrayList<>();
@@ -1051,11 +1319,23 @@ public class HttpFileServer {
                     file.put("fileType", rs.getString("file_type") != null ? rs.getString("file_type") : "application/octet-stream");
                     file.put("fileSize", rs.getLong("filesize"));
                     file.put("uploadTime", rs.getString("upload_time"));
+                    int parentValue = rs.getInt("parent_id");
+                    file.put("parentId", rs.wasNull() ? null : parentValue);
                     fileList.add(file);
                 }
 
-                sendSuccessResponse(exchange, fileList);
-                logger.info("用户查询文件列表：" + userInfo.username + "（文件数：" + fileList.size() + "）");
+                Map<String, Object> response = new HashMap<>();
+                response.put("files", fileList);
+                try {
+                    response.put("breadcrumbs", buildBreadcrumbs(currentFolder, userInfo.userId));
+                } catch (SQLException ex) {
+                    logger.warning("构建面包屑失败：" + ex.getMessage());
+                    response.put("breadcrumbs", Collections.emptyList());
+                }
+                response.put("currentFolder", currentFolder == null ? null : currentFolder.toMap());
+
+                sendSuccessResponse(exchange, response);
+                logger.info("用户查询文件列表：" + userInfo.username + "（文件数：" + fileList.size() + "，folderId=" + folderId + "）");
             } catch (SQLException e) {
                 logger.severe("查询文件列表异常：" + e.getMessage());
                 sendErrorResponse(exchange, 500, "服务器内部错误");
@@ -1074,6 +1354,31 @@ public class HttpFileServer {
             if (!"POST".equals(exchange.getRequestMethod())) {
                 sendErrorResponse(exchange, 405, "只支持POST方法");
                 return;
+            }
+
+            Map<String, String> queryParams = parseQueryParams(exchange.getRequestURI().getQuery());
+            Integer parentId = null;
+            if (queryParams.containsKey("parentId") && !queryParams.get("parentId").isBlank()) {
+                try {
+                    parentId = Integer.parseInt(queryParams.get("parentId"));
+                } catch (NumberFormatException e) {
+                    sendErrorResponse(exchange, 400, "parentId 必须是数字");
+                    return;
+                }
+            }
+
+            if (parentId != null) {
+                try {
+                    FolderInfo targetFolder = getFolderInfo(parentId, userInfo.userId);
+                    if (targetFolder == null) {
+                        sendErrorResponse(exchange, 404, "目标文件夹不存在或无权限");
+                        return;
+                    }
+                } catch (SQLException ex) {
+                    logger.severe("校验目标文件夹失败：" + ex.getMessage());
+                    sendErrorResponse(exchange, 500, "校验目标文件夹失败");
+                    return;
+                }
             }
 
             // 校验Content-Type
@@ -1138,15 +1443,20 @@ public class HttpFileServer {
 
                 // 保存到数据库
                 dbLock.lock();
-                try (PreparedStatement pstmt = db.prepareStatement(
-                        "INSERT INTO files (filename, file_type, filepath, filesize, md5, uploader_id) " +
-                        "VALUES (?, ?, ?, ?, ?, ?)")) {
+        try (PreparedStatement pstmt = db.prepareStatement(
+            "INSERT INTO files (filename, file_type, filepath, filesize, md5, uploader_id, parent_id) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
                     pstmt.setString(1, originalFilename);
                     pstmt.setString(2, mimeType);
                     pstmt.setString(3, storedFilePath);
                     pstmt.setLong(4, fileContent.length);
                     pstmt.setString(5, md5);
                     pstmt.setInt(6, userInfo.userId);
+                    if (parentId == null) {
+                        pstmt.setNull(7, Types.INTEGER);
+                    } else {
+                        pstmt.setInt(7, parentId);
+                    }
                     pstmt.executeUpdate();
 
                     // 响应结果
@@ -1158,6 +1468,7 @@ public class HttpFileServer {
                     fileData.put("fileSize", fileContent.length);
                     fileData.put("md5", md5);
                     fileData.put("uploadTime", new Date());
+                    fileData.put("parentId", parentId);
 
                     sendSuccessResponse(exchange, fileData);
                     logger.info("用户上传文件成功：" + userInfo.username + "（文件：" + originalFilename + "）");

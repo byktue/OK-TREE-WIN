@@ -89,7 +89,8 @@
                 <div class="upload-area" @click="triggerFileInput" @dragover.prevent @drop.prevent="handleDrop">
                     <i class="fa fa-cloud-upload text-5xl text-primary mb-4"></i>
                     <p class="text-gray-500 mb-2">点击或拖拽文件到此处上传</p>
-                    <p class="text-xs text-gray-light">支持JPG/PNG/PDF/DOCX/MP4等格式，单个文件≤100MB</p>
+                    <!-- 补充空文件禁止提示 -->
+                    <p class="text-xs text-gray-light">支持JPG/PNG/PDF/DOCX/MP4等格式，单个文件≤100MB，不允许上传空文件</p>
                     <!-- 隐藏的文件选择框 -->
                     <input 
                         type="file" 
@@ -188,6 +189,11 @@
                     document.getElementById('fileInput').click();
                 },
 
+                // 新增：校验文件是否为空（大小为0字节）
+                checkFileEmpty(file) {
+                    return file.size === 0;
+                },
+
                 // 4. 修复文件类型不支持：添加文件类型校验逻辑
                 checkFileSupport(file) {
                     // 方式1：通过MIME类型校验
@@ -198,7 +204,7 @@
                     return this.supportedExts.includes(ext);
                 },
 
-                // 处理文件选择
+                // 处理文件选择（新增空文件校验）
                 handleFileSelection(event) {
                     const files = event.target.files;
                     if (!files.length) return;
@@ -207,9 +213,11 @@
                     const validFiles = [];
                     const invalidFiles = [];
 
-                    // 筛选支持的文件
+                    // 筛选支持的文件（包含空文件校验）
                     Array.from(files).forEach(file => {
-                        if (this.checkFileSupport(file)) {
+                        if (this.checkFileEmpty(file)) {
+                            invalidFiles.push(`${file.name}（空文件，不允许上传）`);
+                        } else if (this.checkFileSupport(file)) {
                             // 额外校验文件大小（≤100MB）
                             if (file.size <= 100 * 1024 * 1024) {
                                 validFiles.push({
@@ -222,13 +230,13 @@
                                 invalidFiles.push(`${file.name}（超过100MB）`);
                             }
                         } else {
-                            invalidFiles.push(file.name);
+                            invalidFiles.push(`${file.name}（不支持的文件类型）`);
                         }
                     });
 
                     // 处理无效文件提示
                     if (invalidFiles.length > 0) {
-                        this.errorMsg = `当前不支持以下文件类型/大小：${invalidFiles.join('、')}，支持格式：${this.supportedExts.join('、')}`;
+                        this.errorMsg = `当前不支持以下文件：${invalidFiles.join('、')}，支持格式：${this.supportedExts.join('、')}，且文件不能为空、大小≤100MB`;
                     }
 
                     // 添加有效文件到上传队列
@@ -240,7 +248,7 @@
                     event.target.value = '';
                 },
 
-                // 处理拖拽文件
+                // 处理拖拽文件（新增空文件校验）
                 handleDrop(event) {
                     const files = event.dataTransfer.files;
                     if (!files.length) return;
@@ -249,9 +257,11 @@
                     const validFiles = [];
                     const invalidFiles = [];
 
-                    // 同样校验拖拽的文件
+                    // 同样校验拖拽的文件（包含空文件）
                     Array.from(files).forEach(file => {
-                        if (this.checkFileSupport(file)) {
+                        if (this.checkFileEmpty(file)) {
+                            invalidFiles.push(`${file.name}（空文件，不允许上传）`);
+                        } else if (this.checkFileSupport(file)) {
                             if (file.size <= 100 * 1024 * 1024) {
                                 validFiles.push({
                                     name: file.name,
@@ -263,12 +273,12 @@
                                 invalidFiles.push(`${file.name}（超过100MB）`);
                             }
                         } else {
-                            invalidFiles.push(file.name);
+                            invalidFiles.push(`${file.name}（不支持的文件类型）`);
                         }
                     });
 
                     if (invalidFiles.length > 0) {
-                        this.errorMsg = `当前不支持以下文件类型/大小：${invalidFiles.join('、')}，支持格式：${this.supportedExts.join('、')}`;
+                        this.errorMsg = `当前不支持以下文件：${invalidFiles.join('、')}，支持格式：${this.supportedExts.join('、')}，且文件不能为空、大小≤100MB`;
                     }
                     if (validFiles.length > 0) {
                         this.uploadingFiles = [...this.uploadingFiles, ...validFiles];
@@ -300,10 +310,9 @@
                             this.errorMsg = '部分文件上传失败，请重试';
                             console.error('上传失败项：', failed);
                         } else {
-                            // 上传成功，通知父组件并关闭模态框
+                            // 上传成功，跳回文件管理页（原逻辑中$emit不适用页面跳转，调整为直接跳转）
                             this.uploadingFiles = [];
-                            this.$emit('upload-complete');
-                            this.$emit('close');
+                            this.goBack();
                         }
                     }).catch(e=>{
                         console.error('上传出错', e);

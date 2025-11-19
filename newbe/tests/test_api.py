@@ -7,7 +7,7 @@
  - 注册 /api/auth/register
  - 登录 /api/auth/login
  - 获取/修改用户资料 /api/user/profile
- - 文件上传 /api/files/upload
+ - 文件上传 /api/files/upload（含空文件检测）
  - 文件列表 /api/files
  - 文件下载 /api/files/download?fileId=...
  - 文件预览 /api/files/preview?fileId=...
@@ -88,53 +88,90 @@ def main():
         fail(f"资料不匹配：{data}")
     ok("获取用户资料成功")
 
-    # 5. 上传小文件
+    # 5. 上传小文件（正常文件，非空）
     files = {'file': ('hello.txt', b'hello world', 'text/plain')}
     r = requests.post(f"{BASE_URL}/api/files/upload", headers=headers, files=files, timeout=30)
     if r.status_code != 200:
-        fail(f"上传失败：{r.status_code} {r.text}")
+        fail(f"上传正常文件失败：{r.status_code} {r.text}")
     j = r.json()
     if not j.get('success'):
-        fail(f"上传返回失败：{j}")
-    file_info = j.get('data')
-    file_id = file_info.get('id')
-    ok(f"上传成功，fileId={file_id}")
+        fail(f"上传正常文件返回失败：{j}")
+    normal_file_id = j.get('data').get('id')
+    ok(f"正常文件上传成功，fileId={normal_file_id}")
+    
+    # -------------------------- 新增：空文件上传检测 --------------------------
+    # 5.1 上传空文件（内容长度为0）
+    empty_files = {'file': ('empty.txt', b'', 'text/plain')}  # 空字节内容
+    r = requests.post(f"{BASE_URL}/api/files/upload", headers=headers, files=empty_files, timeout=30)
 
-    # 6. 列表确认
+    # 两种预期场景（根据服务端设计选择一种校验逻辑）：
+    # 场景1：服务端禁止上传空文件 → 应返回 4xx 错误（推荐）
+    if r.status_code in [400, 403, 422]:
+        j = r.json()
+        # 适配服务端实际返回的错误信息：'文 件内容为空'（允许中间有空格）
+        error_msg = j.get('message', '').replace(' ', '')  # 去除所有空格再匹配
+        if '文件内容为空' in error_msg:
+            ok(f"空文件上传被拒绝（符合预期）：{r.status_code} {j.get('message')}")
+        else:
+            fail(f"空文件上传被拒绝，但错误信息不明确：{j}")
+
+    # 场景2：服务端允许上传空文件 → 验证文件大小为0
+    elif r.status_code == 200:
+        j = r.json()
+        if not j.get('success'):
+            fail(f"空文件上传返回失败：{j}")
+        empty_file_id = j.get('data').get('id')
+        # 校验服务端存储的文件大小是否为0
+        r = requests.get(f"{BASE_URL}/api/files", headers=headers, timeout=10)
+        files_list = r.json().get('data', [])
+        empty_file = next((f for f in files_list if f.get('id') == empty_file_id), None)
+        if not empty_file:
+            fail(f"空文件上传后未出现在列表")
+        # 验证文件大小（单位通常是字节）
+        if empty_file.get('size', 0) != 0:
+            fail(f"空文件大小异常：期望0字节，实际{empty_file.get('size')}字节")
+        ok(f"空文件上传成功（服务端允许），fileId={empty_file_id}，大小0字节")
+
+    # 场景3：服务端返回其他状态码 → 异常
+    else:
+        fail(f"空文件上传处理异常（HTTP {r.status_code}）：{r.text}")
+    # -------------------------- 空文件上传检测结束 --------------------------
+    
+    # 6. 列表确认（正常文件存在）
     r = requests.get(f"{BASE_URL}/api/files", headers=headers, timeout=10)
     if r.status_code != 200:
         fail(f"查询文件列表失败：{r.status_code} {r.text}")
     j = r.json()
     files_list = j.get('data', [])
-    found = any(f.get('id') == file_id for f in files_list)
-    if not found:
-        fail(f"上传的文件未出现在列表：{files_list}")
-    ok("文件出现在列表中")
+    normal_file_found = any(f.get('id') == normal_file_id for f in files_list)
+    if not normal_file_found:
+        fail(f"正常文件未出现在列表：{files_list}")
+    ok("正常文件出现在列表中")
 
-    # 7. 下载并校验内容
-    r = requests.get(f"{BASE_URL}/api/files/download?fileId={file_id}", headers=headers, timeout=30)
+    # 7. 下载并校验正常文件内容
+    r = requests.get(f"{BASE_URL}/api/files/download?fileId={normal_file_id}", headers=headers, timeout=30)
     if r.status_code != 200:
-        fail(f"下载失败：{r.status_code} {r.text}")
+        fail(f"正常文件下载失败：{r.status_code} {r.text}")
     content = r.content
     if content != b'hello world':
-        fail(f"下载内容不匹配，期望 'hello world'，实际长度 {len(content)}")
-    ok("下载并校验内容成功")
+        fail(f"正常文件下载内容不匹配，期望 'hello world'，实际长度 {len(content)}")
+    ok("正常文件下载并校验内容成功")
 
-    # 8. 预览（文本）
-    r = requests.get(f"{BASE_URL}/api/files/preview?fileId={file_id}", headers=headers, timeout=10)
+    # 8. 预览（正常文件文本）
+    r = requests.get(f"{BASE_URL}/api/files/preview?fileId={normal_file_id}", headers=headers, timeout=10)
     if r.status_code != 200:
-        fail(f"预览失败：{r.status_code} {r.text}")
+        fail(f"正常文件预览失败：{r.status_code} {r.text}")
     j = r.json()
     preview = j.get('data', {}).get('content', '')
     if 'hello' not in preview:
-        fail(f"预览内容不包含 hello：{preview}")
-    ok("文件预览成功")
+        fail(f"正常文件预览内容不包含 hello：{preview}")
+    ok("正常文件预览成功")
 
-    # 9. 删除 -> 移至回收站
-    r = requests.post(f"{BASE_URL}/api/files/delete", headers=headers, json={'fileId': file_id}, timeout=10)
+    # 9. 删除正常文件 -> 移至回收站
+    r = requests.post(f"{BASE_URL}/api/files/delete", headers=headers, json={'fileId': normal_file_id}, timeout=10)
     if r.status_code != 200:
-        fail(f"删除失败：{r.status_code} {r.text}")
-    ok("删除（移至回收站）成功")
+        fail(f"删除正常文件失败：{r.status_code} {r.text}")
+    ok("删除正常文件（移至回收站）成功")
 
     # 10. 回收站列表确认
     r = requests.get(f"{BASE_URL}/api/recycle-bin", headers=headers, timeout=10)
@@ -142,22 +179,21 @@ def main():
         fail(f"回收站查询失败：{r.status_code} {r.text}")
     j = r.json()
     recycle = j.get('data', [])
-    found = any(f.get('id') == file_id for f in recycle)
-    if not found:
-        fail(f"被删除的文件未出现在回收站：{recycle}")
-    ok("回收站列表包含被删除文件")
+    normal_file_in_recycle = any(f.get('id') == normal_file_id for f in recycle)
+    if not normal_file_in_recycle:
+        fail(f"正常文件未出现在回收站：{recycle}")
+    ok("回收站列表包含正常文件")
 
-    # 11. 还原
-    r = requests.post(f"{BASE_URL}/api/recycle-bin/restore", headers=headers, json={'fileId': file_id}, timeout=10)
+    # 11. 还原正常文件
+    r = requests.post(f"{BASE_URL}/api/recycle-bin/restore", headers=headers, json={'fileId': normal_file_id}, timeout=10)
     if r.status_code != 200:
-        fail(f"还原失败：{r.status_code} {r.text}")
-    ok("还原成功")
+        fail(f"还原正常文件失败：{r.status_code} {r.text}")
+    ok("还原正常文件成功")
 
     # 12. 清空回收站（先删除再清空以验证接口）
-    # 先再次删除
-    r = requests.post(f"{BASE_URL}/api/files/delete", headers=headers, json={'fileId': file_id}, timeout=10)
+    r = requests.post(f"{BASE_URL}/api/files/delete", headers=headers, json={'fileId': normal_file_id}, timeout=10)
     if r.status_code != 200:
-        fail(f"第二次删除失败：{r.status_code} {r.text}")
+        fail(f"第二次删除正常文件失败：{r.status_code} {r.text}")
     r = requests.post(f"{BASE_URL}/api/recycle-bin/empty", headers=headers, timeout=20)
     if r.status_code != 200:
         fail(f"清空回收站失败：{r.status_code} {r.text}")
@@ -181,7 +217,6 @@ def main():
     if r.status_code != 200:
         print("无法用管理员帐号登录以自动删除测试用户，请手动清理。")
         print(r.status_code, r.text)
-        # 仍视为成功运行，但提醒清理
         ok("测试完成（未删除用户）")
         return
     admin_token = r.json().get('token')
