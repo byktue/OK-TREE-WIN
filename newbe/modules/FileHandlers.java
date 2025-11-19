@@ -697,6 +697,102 @@ public final class FileHandlers {
         }
     }
 
+    public static class FileContentHandler extends AbstractTokenHandler {
+        private final ReentrantLock dbLock = ServerContext.getDbLock();
+
+        @Override
+        protected void handleWithAuth(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendErrorResponse(exchange, 405, "只支持GET方法");
+                return;
+            }
+
+            Map<String, String> queryParams = FileHelper.parseQueryParams(exchange.getRequestURI().getQuery());
+            String fileIdStr = queryParams.get("fileId");
+            if (fileIdStr == null || fileIdStr.isBlank()) {
+                sendErrorResponse(exchange, 400, "缺少参数：fileId");
+                return;
+            }
+
+            int fileId;
+            try {
+                fileId = Integer.parseInt(fileIdStr.trim());
+            } catch (NumberFormatException e) {
+                sendErrorResponse(exchange, 400, "fileId必须是数字");
+                return;
+            }
+
+            try {
+                dbLock.lock();
+                PreparedStatement pstmt = ServerContext.getConnection().prepareStatement(
+                        "SELECT filename, filepath, filesize, file_type FROM files " +
+                        "WHERE id = ? AND uploader_id = ? AND is_deleted = 0");
+                pstmt.setInt(1, fileId);
+                pstmt.setInt(2, userInfo.userId);
+                ResultSet rs = pstmt.executeQuery();
+
+                if (!rs.next()) {
+                    sendErrorResponse(exchange, 404, "文件不存在或无权限");
+                    return;
+                }
+
+                String filename = rs.getString("filename");
+                String filepath = rs.getString("filepath");
+                long fileSize = rs.getLong("filesize");
+                String fileType = rs.getString("file_type");
+
+                Path filePath = Paths.get(filepath);
+                if (!Files.exists(filePath)) {
+                    sendErrorResponse(exchange, 404, "文件已被删除或移动");
+                    return;
+                }
+                long actualSize = Files.size(filePath);
+                if (actualSize != fileSize) {
+                    if (ServerContext.getLogger() != null) {
+                        ServerContext.getLogger().warning("文件大小与记录不一致，fileId=" + fileId);
+                    }
+                    fileSize = actualSize;
+                }
+
+                String mimeType = (fileType == null || fileType.isBlank()) ? "application/octet-stream" : fileType;
+                exchange.getResponseHeaders().set("Content-Type", mimeType);
+                exchange.getResponseHeaders().set("Content-Length", String.valueOf(fileSize));
+                exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                String encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
+                exchange.getResponseHeaders().set("Content-Disposition", "inline; filename=\"" + encodedFilename + "\"");
+
+                exchange.sendResponseHeaders(200, fileSize);
+
+                try (BufferedInputStream in = new BufferedInputStream(Files.newInputStream(filePath));
+                     BufferedOutputStream out = new BufferedOutputStream(exchange.getResponseBody())) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, bytesRead);
+                    }
+                    out.flush();
+                }
+
+                if (ServerContext.getLogger() != null) {
+                    ServerContext.getLogger().info("用户获取文件内容用于预览：" + userInfo.username + "（文件：" + filename + "）");
+                }
+            } catch (Exception e) {
+                if (ServerContext.getLogger() != null) {
+                    ServerContext.getLogger().severe("文件内容读取异常：" + e.getMessage());
+                }
+                try {
+                    sendErrorResponse(exchange, 500, "获取文件内容失败：" + e.getMessage());
+                } catch (IllegalStateException ex) {
+                    if (ServerContext.getLogger() != null) {
+                        ServerContext.getLogger().warning("文件内容响应已发送：" + ex.getMessage());
+                    }
+                }
+            } finally {
+                dbLock.unlock();
+            }
+        }
+    }
+
     public static class FilePreviewHandler extends AbstractTokenHandler {
         private final ReentrantLock dbLock = ServerContext.getDbLock();
 
@@ -751,6 +847,7 @@ public final class FileHandlers {
                 previewData.put("fileSize", fileSize);
                 previewData.put("content", previewContent);
                 previewData.put("isTruncated", isTruncated);
+                previewData.put("mimeType", fileType);
                 previewData.put("tip", isTruncated ? "仅显示前2KB内容，完整内容请下载" : "完整内容预览");
 
                 sendSuccessResponse(exchange, previewData);

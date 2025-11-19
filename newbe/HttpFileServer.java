@@ -213,6 +213,7 @@ public class HttpFileServer {
         server.createContext("/api/files/permanent-delete", new LoggingHandler(new FileHandlers.FilePermanentDeleteHandler()));
         server.createContext("/api/files/create-folder", new LoggingHandler(new FolderHandlers.CreateFolderHandler()));
         server.createContext("/api/files/download", new LoggingHandler(new FileHandlers.FileDownloadHandler()));
+    server.createContext("/api/files/content", new LoggingHandler(new FileHandlers.FileContentHandler()));
         server.createContext("/api/files/preview", new LoggingHandler(new FileHandlers.FilePreviewHandler()));
 
         server.createContext("/api/recycle-bin", new LoggingHandler(new RecycleHandlers.RecycleBinHandler()));

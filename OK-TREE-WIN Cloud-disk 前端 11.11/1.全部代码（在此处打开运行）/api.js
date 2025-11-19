@@ -55,6 +55,17 @@
     return apiGet('/storage/usage');
   }
 
+  async function getFileBlob(path){
+    const res = await fetch(API_BASE + path, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${getToken()}` }
+    });
+    if (!res.ok){
+      throw new Error('获取文件内容失败: ' + res.status);
+    }
+    return res.blob();
+  }
+
   // 上传单文件（FormData），返回解析后的JSON
   async function uploadFile(path, file, onProgress){
     return new Promise((resolve, reject) => {
@@ -89,6 +100,7 @@
     apiGet,
     apiPost,
     apiDownload,
+    getFileBlob,
     uploadFile,
     getStorageUsage
   };

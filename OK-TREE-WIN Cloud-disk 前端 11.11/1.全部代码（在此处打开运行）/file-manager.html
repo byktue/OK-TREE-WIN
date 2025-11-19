@@ -299,63 +299,61 @@
                         <!-- 预览内容区 -->
                         <main class="flex-1 overflow-auto p-6">
                             <div class="preview-header mb-6">
-                                <h2 class="text-xl font-medium">{{ file.name }}</h2>
-                                <p class="text-gray-light text-sm mt-1">
+                                <h2 class="text-xl font-medium">{{ displayName }}</h2>
+                                <p v-if="file" class="text-gray-light text-sm mt-1">
                                     修改于 {{ formatDate(file.modifiedTime) }} · {{ formatSize(file.size) }}
                                 </p>
                             </div>
 
-                            <div class="preview-container">
-                                <!-- 图片预览 -->
-                                <div v-if="file.type === 'image'" class="flex justify-center">
-                                    <img :src="getPreviewUrl()" alt="预览图片" class="max-w-full max-h-[60vh] object-contain">
+                            <div class="preview-container min-h-[60vh] flex items-center justify-center">
+                                <div v-if="isLoading" class="text-gray-500 flex flex-col items-center gap-3">
+                                    <i class="fa fa-spinner fa-spin text-3xl"></i>
+                                    <p>正在加载预览内容...</p>
                                 </div>
-                                
-                                <!-- PDF预览 -->
-                                <div v-else-if="file.type === 'pdf'" class="flex justify-center">
-                                    <div class="bg-gray-100 p-8 rounded-lg text-center">
-                                        <i class="fa fa-file-pdf-o text-6xl text-red-500 mb-4"></i>
-                                        <h3 class="text-lg font-medium mb-2">PDF 预览</h3>
-                                        <p class="text-gray-light mb-6">此处显示PDF文件预览内容</p>
+
+                                <div v-else-if="previewError" class="text-center">
+                                    <i class="fa fa-exclamation-circle text-4xl text-red-500 mb-3"></i>
+                                    <p class="text-red-500 font-medium mb-2">{{ previewError }}</p>
+                                    <p class="text-gray-500 text-sm">请尝试下载文件后查看</p>
+                                </div>
+
+                                <template v-else>
+                                    <div v-if="previewMode === 'image'" class="flex justify-center w-full">
+                                        <img :src="previewUrl" alt="预览图片" class="max-w-full max-h-[70vh] object-contain rounded-lg shadow" loading="lazy">
                                     </div>
-                                </div>
-                                
-                                <!-- 视频预览 -->
-                                <div v-else-if="file.type === 'video'" class="flex justify-center">
-                                    <video controls :src="getPreviewUrl()" class="max-w-full max-h-[60vh]">
-                                        您的浏览器不支持视频播放
-                                      </video>
-                                </div>
-                                
-                                <!-- 音频预览 -->
-                                <div v-else-if="file.type === 'audio'" class="flex justify-center">
-                                    <div class="w-full max-w-md bg-gray-100 p-6 rounded-lg">
+
+                                    <div v-else-if="previewMode === 'video'" class="flex justify-center w-full">
+                                        <video controls :src="previewUrl" class="max-w-full max-h-[70vh] rounded-lg shadow">
+                                            您的浏览器不支持视频播放
+                                        </video>
+                                    </div>
+
+                                    <div v-else-if="previewMode === 'audio'" class="w-full max-w-xl bg-gray-50 p-8 rounded-xl shadow">
                                         <h3 class="text-center mb-4">{{ file.name }}</h3>
-                                        <audio controls :src="getPreviewUrl()" class="w-full">
+                                        <audio controls :src="previewUrl" class="w-full">
                                             您的浏览器不支持音频播放
-                                          </audio>
+                                        </audio>
                                     </div>
-                                </div>
-                                
-                                <!-- 文档预览 -->
-                                <div v-else-if="file.type === 'doc'" class="flex justify-center">
-                                    <div class="bg-gray-100 p-8 rounded-lg text-center">
-                                        <i class="fa fa-file-text text-6xl text-blue-500 mb-4"></i>
-                                        <h3 class="text-lg font-medium mb-2">文档预览</h3>
-                                        <p class="text-gray-light mb-6">此处显示文档文件预览内容</p>
+
+                                    <div v-else-if="previewMode === 'pdf'" class="w-full">
+                                        <iframe :src="previewUrl" class="w-full h-[70vh] rounded-xl border"></iframe>
                                     </div>
-                                </div>
-                                
-                                <!-- 不支持的文件类型 -->
-                                <div v-else class="flex flex-col items-center justify-center h-64">
-                                    <i class="fa fa-file-o text-6xl text-gray-light mb-4"></i>
-                                    <h3 class="text-lg font-medium mb-2">当前不支持该文件类型</h3>
-                                    <p class="text-gray-light mb-6">请尝试下载文件后查看</p>
-                                    <button @click="$emit('download')" class="action-btn action-btn-primary">
-                                        <i class="fa fa-download"></i>
-                                        <span>下载文件</span>
-                                    </button>
-                                </div>
+
+                                    <div v-else-if="previewMode === 'text'" class="w-full bg-gray-50 rounded-xl p-6 shadow-inner">
+                                        <pre class="whitespace-pre-wrap break-all text-sm font-mono text-dark max-h-[70vh] overflow-auto">{{ previewContent }}</pre>
+                                        <p v-if="previewTruncated" class="text-xs text-gray-500 mt-2">仅展示部分内容，完整内容请下载文件查看</p>
+                                    </div>
+
+                                    <div v-else class="flex flex-col items-center justify-center text-center">
+                                        <i class="fa fa-file-o text-6xl text-gray-light mb-4"></i>
+                                        <h3 class="text-lg font-medium mb-2">当前不支持该文件类型</h3>
+                                        <p class="text-gray-light mb-6">请尝试下载文件后查看</p>
+                                        <button @click="$emit('download')" class="action-btn action-btn-primary">
+                                            <i class="fa fa-download"></i>
+                                            <span>下载文件</span>
+                                        </button>
+                                    </div>
+                                </template>
                             </div>
                         </main>
                     </div>
@@ -365,12 +363,43 @@
             methods: {
                 formatDate,
                 formatSize,
-                getPreviewUrl() {
-                    // 实际项目中应返回文件的预览URL
-                    return `https://picsum.photos/800/600?random=${this.file.id}`;
-                },
                 handleShare() {
-                    alert(`分享链接已复制：https://cloud-disk.com/share/${this.file.id}`);
+                    if (this.file && this.file.id) {
+                        alert(`分享链接已复制：https://cloud-disk.com/share/${this.file.id}`);
+                    }
+                }
+            },
+            computed: {
+                isLoading() {
+                    return !!(this.file && this.file.previewLoading);
+                },
+                previewError() {
+                    return this.file && this.file.previewError ? this.file.previewError : '';
+                },
+                previewUrl() {
+                    return this.file && this.file.previewUrl ? this.file.previewUrl : '';
+                },
+                previewContent() {
+                    return this.file && this.file.previewContent ? this.file.previewContent : '';
+                },
+                previewTruncated() {
+                    return !!(this.file && this.file.previewTruncated);
+                },
+                displayName() {
+                    return this.file && this.file.name ? this.file.name : '文件预览';
+                },
+                previewMode() {
+                    if (!this.file || this.isLoading || this.previewError) {
+                        return 'unknown';
+                    }
+                    const mime = ((this.file && (this.file.previewMime || this.file.mimeType)) || '').toLowerCase();
+                    const name = (this.file && this.file.name ? this.file.name : '').toLowerCase();
+                    if (mime.startsWith('image/')) return 'image';
+                    if (mime.startsWith('video/')) return 'video';
+                    if (mime.startsWith('audio/')) return 'audio';
+                    if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+                    if (mime.startsWith('text/') || this.previewContent) return 'text';
+                    return 'unsupported';
                 }
             }
         };
@@ -871,7 +900,7 @@
                     <PreviewModal 
                         :show="showPreviewModal"
                         :file="previewFile"
-                        @close="showPreviewModal = false"
+                        @close="closePreviewModal"
                         @download="handleDownload(previewFile)"
                     ></PreviewModal>
                     
@@ -1020,10 +1049,51 @@
                         this.handlePreview(file);
                     }
                 },
-                handlePreview(file) {
-                    this.previewFile = file;
+                async handlePreview(file) {
+                    if (!file || !file.id) return;
+                    if (!window.CloudApi || typeof CloudApi.apiGet !== 'function') {
+                        alert('缺少 CloudApi，无法预览文件');
+                        return;
+                    }
+
+                    this.revokePreviewUrl();
+                    const baseInfo = {
+                        ...file,
+                        previewLoading: true,
+                        previewError: null,
+                        previewUrl: '',
+                        previewContent: '',
+                        previewMime: file.mimeType || '',
+                        previewTruncated: false
+                    };
+                    this.previewFile = baseInfo;
                     this.showPreviewModal = true;
                     this.showActionMenu = false;
+
+                    try {
+                        if (this.shouldUseTextPreview(file)) {
+                            const res = await CloudApi.apiGet(`/files/preview?fileId=${file.id}`);
+                            if (res && res.success === false) {
+                                throw new Error(res.message || '预览失败');
+                            }
+                            const payload = res?.data || res || {};
+                            this.previewFile.previewContent = payload.content || '';
+                            this.previewFile.previewTruncated = !!payload.isTruncated;
+                            this.previewFile.previewMime = payload.mimeType || this.previewFile.previewMime || 'text/plain';
+                        } else if (typeof CloudApi.getFileBlob === 'function') {
+                            const blob = await CloudApi.getFileBlob(`/files/content?fileId=${file.id}`);
+                            const objectUrl = URL.createObjectURL(blob);
+                            this.previewFile.previewUrl = objectUrl;
+                            this.previewFile.previewMime = blob.type || this.previewFile.previewMime || this.inferMimeFromName(file.name);
+                        } else {
+                            throw new Error('缺少文件内容接口');
+                        }
+                    } catch (e) {
+                        console.error('预览失败', e);
+                        this.previewFile.previewError = e?.message || '无法预览该文件';
+                    } finally {
+                        this.previewFile.previewLoading = false;
+                    }
                 },
                 async fetchFiles(targetFolderId) {
                     const paramProvided = arguments.length > 0;
@@ -1069,21 +1139,74 @@
                 normalizeFileRecord(raw) {
                     const id = raw?.id || raw?.file_id || raw?.fileId;
                     const filename = raw?.filename || raw?.name || raw?.file_name || `未命名-${id || ''}`;
-                    const rawType = (raw?.file_type || raw?.fileType || raw?.type || '').toLowerCase();
-                    const normalizedType = rawType === 'folder' ? 'folder' : this.detectTypeFromName(filename, rawType);
+                    const mimeTypeValue = raw?.file_type || raw?.fileType || raw?.mimeType || '';
+                    const backendType = (raw?.type || '').toLowerCase();
+                    const normalizedType = backendType ? backendType : this.detectTypeFromName(filename, mimeTypeValue);
                     return {
                         id,
                         name: filename,
                         type: normalizedType,
                         modifiedTime: raw?.upload_time || raw?.uploadTime || raw?.modifiedTime || raw?.updated_at || new Date().toISOString(),
                         size: raw?.filesize || raw?.fileSize || raw?.size || 0,
-                        parentId: raw?.parent_id ?? raw?.parentId ?? null
+                        parentId: raw?.parent_id ?? raw?.parentId ?? null,
+                        mimeType: mimeTypeValue
                     };
                 },
 
+
+                shouldUseTextPreview(file) {
+                    const mime = ((file && file.mimeType) || '').toLowerCase();
+                    if (mime.startsWith('text/') || mime.includes('json') || mime.includes('xml')) {
+                        return true;
+                    }
+                    const ext = this.getFileExtension(file && file.name ? file.name : '');
+                    const textExts = ['txt', 'md', 'json', 'js', 'ts', 'css', 'html', 'htm', 'xml', 'csv', 'log', 'java', 'py', 'c', 'cpp', 'h'];
+                    return textExts.includes(ext);
+                },
+
+                inferMimeFromName(name = '') {
+                    const ext = this.getFileExtension(name);
+                    const map = {
+                        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+                        mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
+                        mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+                        pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', json: 'application/json',
+                        csv: 'text/csv', html: 'text/html', htm: 'text/html'
+                    };
+                    return map[ext] || 'application/octet-stream';
+                },
+
+                getFileExtension(name = '') {
+                    const parts = name.toLowerCase().split('.');
+                    if (parts.length <= 1) return '';
+                    return parts.pop();
+                },
+
+                revokePreviewUrl() {
+                    if (this.previewFile && this.previewFile.previewUrl) {
+                        URL.revokeObjectURL(this.previewFile.previewUrl);
+                    }
+                },
+
+                closePreviewModal() {
+                    this.revokePreviewUrl();
+                    this.showPreviewModal = false;
+                    this.previewFile = null;
+                },
                 detectTypeFromName(name, rawType) {
-                    if (rawType && rawType !== 'application/octet-stream' && rawType !== 'file') {
-                        return rawType;
+                    const mime = (rawType || '').toLowerCase();
+                    if (mime) {
+                        if (mime === 'folder') return 'folder';
+                        if (mime === 'application/pdf' || mime.endsWith('pdf')) return 'pdf';
+                        if (mime.startsWith('image/')) return 'image';
+                        if (mime.startsWith('video/')) return 'video';
+                        if (mime.startsWith('audio/')) return 'audio';
+                        if (mime.startsWith('text/') || mime.includes('msword') || mime.includes('officedocument') || mime.includes('rtf')) {
+                            return 'doc';
+                        }
+                        if (mime !== 'application/octet-stream' && mime !== 'file' && !mime.includes('/')) {
+                            return mime;
+                        }
                     }
                     const ext = (name || '').split('.').pop().toLowerCase();
                     const map = {
@@ -1202,6 +1325,9 @@
                 // 初始加载真实文件列表
                 this.fetchFiles(null);
                 this.refreshStorageUsage();
+            },
+            beforeUnmount() {
+                this.revokePreviewUrl();
             }
         };
 
