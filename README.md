@@ -1,21 +1,18 @@
-
-使用mvn安装相应依赖
-```bash
-mvn clean package -DskipTests
-```
-
-地址对应到后端文件夹
-```bash
-cd newbe
-```
-
 编译
 ```bash
-javac -cp ".\lib\*;." -d .\out HttpFileServer.java
+cd newbe\modules
+mvn clean package -DskipTests
 ```
 
 运行
 ```bash
-java -cp ".\lib\*;.\out" HttpFileServer
+cd ..
+java --enable-native-access=ALL-UNNAMED -cp "modules\target\file-server-1.0-SNAPSHOT.jar;modules\lib\*" HttpFileServer
 ```
 
+端口代理
+```bash
+cd ..
+cd "OK-TREE-WIN Cloud-disk 前端 11.11\1.全部代码（在此处打开运行）"
+python -m http.server 5500
+```
