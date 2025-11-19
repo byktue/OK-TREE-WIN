@@ -51,6 +51,10 @@
     return true;
   }
 
+  async function getStorageUsage(){
+    return apiGet('/storage/usage');
+  }
+
   // 上传单文件（FormData），返回解析后的JSON
   async function uploadFile(path, file, onProgress){
     return new Promise((resolve, reject) => {
@@ -85,6 +89,7 @@
     apiGet,
     apiPost,
     apiDownload,
-    uploadFile
+    uploadFile,
+    getStorageUsage
   };
 })(window);

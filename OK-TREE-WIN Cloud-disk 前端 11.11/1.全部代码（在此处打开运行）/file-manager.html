@@ -76,6 +76,22 @@
             }
         };
 
+        const BYTES_IN_GB = 1024 * 1024 * 1024;
+        const normalizeStorageUsage = (payload = {}) => {
+            const quotaBytes = payload.totalBytes ?? payload.quotaBytes ?? 10 * BYTES_IN_GB;
+            const usedBytes = payload.usedBytes ?? 0;
+            const recycledBytes = payload.recycleBytes ?? 0;
+            const availableBytes = Math.max(quotaBytes - usedBytes, 0);
+            const percent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
+            return {
+                usedGb: Number((usedBytes / BYTES_IN_GB).toFixed(2)),
+                totalGb: Number((quotaBytes / BYTES_IN_GB).toFixed(2)),
+                recycledGb: Number((recycledBytes / BYTES_IN_GB).toFixed(2)),
+                availableGb: Number((availableBytes / BYTES_IN_GB).toFixed(2)),
+                usedPercent: Number(percent.toFixed(1))
+            };
+        };
+
         // 头部组件
         const Header = {
             template: `
@@ -205,14 +221,7 @@
                     </div>
                 </aside>
             `,
-            props: ['isOpen', 'activeCategory'],
-            data() {
-                return {
-                    usedStorage: '2.5',
-                    totalStorage: '10',
-                    usedPercent: 25
-                }
-            },
+            props: ['isOpen', 'activeCategory', 'usedStorage', 'totalStorage', 'usedPercent'],
             methods: {
                 navigateTo(page) {
                     window.location.href = page;
@@ -684,6 +693,9 @@
                         <Sidebar 
                             :is-open="sidebarOpen" 
                             :active-category="currentCategory"
+                            :used-storage="usedStorage"
+                            :total-storage="totalStorage"
+                            :used-percent="usedPercent"
                             @category-change="handleCategoryChange"
                         ></Sidebar>
                         
@@ -916,8 +928,9 @@
                     showCreateFolderModal: false,
                     newFolderName: '',
                     createFolderError: '',
-                    usedStorage: '2.5',
-                    totalStorage: '10',
+                    usedStorage: 0,
+                    totalStorage: 10,
+                    usedPercent: 0,
                     isMobile: window.innerWidth < 768,
                     files: [],
                     currentFolderId: null,
@@ -1133,6 +1146,7 @@
                         if (res && res.success) {
                             this.fetchFiles(this.currentFolderId);
                             this.showDeleteModal = false;
+                            this.refreshStorageUsage();
                             alert('文件已移至回收站');
                         } else {
                             alert(res.message || '删除失败');
@@ -1146,6 +1160,26 @@
                 handleUploadComplete() {
                     // 上传完成后刷新文件列表
                     this.fetchFiles(this.currentFolderId);
+                    this.refreshStorageUsage();
+                },
+
+                async refreshStorageUsage() {
+                    if (!window.CloudApi || typeof CloudApi.getStorageUsage !== 'function') {
+                        console.warn('CloudApi.getStorageUsage 不可用');
+                        return;
+                    }
+                    try {
+                        const res = await CloudApi.getStorageUsage();
+                        const payload = res?.data || res || {};
+                        const normalized = normalizeStorageUsage(payload);
+                        this.usedStorage = normalized.usedGb;
+                        if (normalized.totalGb) {
+                            this.totalStorage = normalized.totalGb;
+                        }
+                        this.usedPercent = normalized.usedPercent;
+                    } catch (e) {
+                        console.error('加载存储信息失败', e);
+                    }
                 }
             },
             mounted() {
@@ -1167,6 +1201,7 @@
                 });
                 // 初始加载真实文件列表
                 this.fetchFiles(null);
+                this.refreshStorageUsage();
             }
         };
 

@@ -218,6 +218,7 @@ public class HttpFileServer {
         server.createContext("/api/recycle-bin", new LoggingHandler(new RecycleHandlers.RecycleBinHandler()));
         server.createContext("/api/recycle-bin/restore", new LoggingHandler(new RecycleHandlers.RestoreHandler()));
         server.createContext("/api/recycle-bin/empty", new LoggingHandler(new RecycleHandlers.EmptyRecycleHandler()));
+    server.createContext("/api/storage/usage", new LoggingHandler(new StorageHandlers.UsageHandler()));
 
         server.createContext("/api/admin/delete-user", new LoggingHandler(new AdminHandlers.AdminDeleteUserHandler()));
 
