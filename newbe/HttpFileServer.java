@@ -255,9 +255,11 @@ public class HttpFileServer {
 
         // 线程池优化：基于CPU核心数动态配置，避免资源耗尽
         int coreThreads = Runtime.getRuntime().availableProcessors() * 2;
+        // 确保 maximumPoolSize 不小于 corePoolSize，防止在高核数机器上抛出 IllegalArgumentException
+        int maxThreads = Math.max(coreThreads, 20); // 最小上限为20
         server.setExecutor(new ThreadPoolExecutor(
             coreThreads,
-            20, // 最大线程数限制
+            maxThreads,
             60L,
             TimeUnit.SECONDS,
             new LinkedBlockingQueue<>(100), // 任务队列大小
