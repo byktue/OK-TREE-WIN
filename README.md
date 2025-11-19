@@ -6,7 +6,6 @@ mvn clean package -DskipTests
 
 位于newbe,运行
 ```bash
-cd ..
 java --enable-native-access=ALL-UNNAMED -cp "modules\target\file-server-1.0-SNAPSHOT.jar;modules\lib\*" HttpFileServer
 ```
 

@@ -23,9 +23,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -359,56 +361,160 @@ public final class FileHandlers {
                 return;
             }
 
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+            List<Integer> targetIds;
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
                 JsonObject req = gson.fromJson(br, JsonObject.class);
-                if (!req.has("fileId")) {
-                    sendErrorResponse(exchange, 400, "缺少参数：fileId");
-                    return;
-                }
-                int fileId = req.get("fileId").getAsInt();
+                targetIds = extractFileIds(req);
+            } catch (Exception e) {
+                sendErrorResponse(exchange, 400, "请求体解析失败：" + e.getMessage());
+                return;
+            }
 
-                dbLock.lock();
-                try {
-                    PreparedStatement pstmt = ServerContext.getConnection().prepareStatement(
-                            "SELECT filename, filepath FROM files WHERE id = ? AND uploader_id = ? AND is_deleted = 0");
-                    pstmt.setInt(1, fileId);
-                    pstmt.setInt(2, userInfo.userId);
-                    ResultSet rs = pstmt.executeQuery();
+            if (targetIds.isEmpty()) {
+                sendErrorResponse(exchange, 400, "缺少参数：fileId 或 fileIds");
+                return;
+            }
 
-                    if (!rs.next()) {
-                        sendErrorResponse(exchange, 404, "文件不存在或无权限");
+            dbLock.lock();
+            try {
+                int deletedCount = 0;
+                for (int fileId : targetIds) {
+                    FileMeta meta = fetchFileMeta(fileId);
+                    if (meta == null) {
+                        sendErrorResponse(exchange, 404, "文件不存在或无权限：" + fileId);
                         return;
                     }
-                    String filename = rs.getString("filename");
-                    String filepath = rs.getString("filepath");
-
-                    Path sourcePath = Paths.get(filepath);
-                    Path targetPath = Paths.get(HttpFileServer.RECYCLE_DIR + java.io.File.separator + filename);
-                    if (Files.exists(targetPath)) {
-                        String timestamp = String.valueOf(System.currentTimeMillis());
-                        String newFilename = timestamp + "_" + filename;
-                        targetPath = Paths.get(HttpFileServer.RECYCLE_DIR + java.io.File.separator + newFilename);
+                    if (meta.isFolder()) {
+                        deleteFolderRecursive(meta);
+                    } else {
+                        deleteFile(meta);
                     }
-                    Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
-
-                    pstmt = ServerContext.getConnection().prepareStatement(
-                            "UPDATE files SET is_deleted = 1, delete_time = CURRENT_TIMESTAMP WHERE id = ?");
-                    pstmt.setInt(1, fileId);
-                    pstmt.executeUpdate();
-
-                    sendSuccessResponse(exchange, null);
-                    if (ServerContext.getLogger() != null) {
-                        ServerContext.getLogger().info("用户删除文件（移至回收站）：" + userInfo.username + "（文件：" + filename + "）");
-                    }
-                } finally {
-                    dbLock.unlock();
+                    deletedCount++;
                 }
+                Map<String, Object> resp = new HashMap<>();
+                resp.put("deleted", deletedCount);
+                sendSuccessResponse(exchange, resp);
             } catch (Exception e) {
                 if (ServerContext.getLogger() != null) {
                     ServerContext.getLogger().severe("删除文件异常：" + e.getMessage());
                 }
                 sendErrorResponse(exchange, 500, "文件删除失败：" + e.getMessage());
+            } finally {
+                dbLock.unlock();
+            }
+        }
+
+        private List<Integer> extractFileIds(JsonObject req) {
+            List<Integer> result = new ArrayList<>();
+            if (req == null) {
+                return result;
+            }
+            Set<Integer> unique = new LinkedHashSet<>();
+            if (req.has("fileIds") && req.get("fileIds").isJsonArray()) {
+                req.get("fileIds").getAsJsonArray().forEach(element -> {
+                    try {
+                        unique.add(element.getAsInt());
+                    } catch (Exception ignored) {}
+                });
+            }
+            if (req.has("fileId")) {
+                try {
+                    unique.add(req.get("fileId").getAsInt());
+                } catch (Exception ignored) {}
+            }
+            result.addAll(unique);
+            return result;
+        }
+
+        private FileMeta fetchFileMeta(int fileId) throws SQLException {
+            try (PreparedStatement pstmt = ServerContext.getConnection().prepareStatement(
+                    "SELECT id, filename, filepath, file_type FROM files WHERE id = ? AND uploader_id = ? AND is_deleted = 0")) {
+                pstmt.setInt(1, fileId);
+                pstmt.setInt(2, userInfo.userId);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    return new FileMeta(
+                            rs.getInt("id"),
+                            rs.getString("filename"),
+                            rs.getString("filepath"),
+                            rs.getString("file_type"));
+                }
+            }
+        }
+
+        private void deleteFile(FileMeta meta) throws SQLException, IOException {
+            moveFileToRecycle(meta);
+            markDeleted(meta.id());
+            if (ServerContext.getLogger() != null) {
+                ServerContext.getLogger().info("用户删除文件（移至回收站）：" + userInfo.username + "（文件：" + meta.name() + "）");
+            }
+        }
+
+        private void deleteFolderRecursive(FileMeta folder) throws SQLException, IOException {
+            for (FileMeta child : fetchChildren(folder.id())) {
+                if (child.isFolder()) {
+                    deleteFolderRecursive(child);
+                } else {
+                    deleteFile(child);
+                }
+            }
+            markDeleted(folder.id());
+            if (ServerContext.getLogger() != null) {
+                ServerContext.getLogger().info("用户删除文件夹（移至回收站）：" + userInfo.username + "（文件夹：" + folder.name() + "）");
+            }
+        }
+
+        private List<FileMeta> fetchChildren(int folderId) throws SQLException {
+            List<FileMeta> children = new ArrayList<>();
+            try (PreparedStatement pstmt = ServerContext.getConnection().prepareStatement(
+                    "SELECT id, filename, filepath, file_type FROM files WHERE parent_id = ? AND uploader_id = ? AND is_deleted = 0")) {
+                pstmt.setInt(1, folderId);
+                pstmt.setInt(2, userInfo.userId);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        children.add(new FileMeta(
+                                rs.getInt("id"),
+                                rs.getString("filename"),
+                                rs.getString("filepath"),
+                                rs.getString("file_type")));
+                    }
+                }
+            }
+            return children;
+        }
+
+        private void markDeleted(int fileId) throws SQLException {
+            try (PreparedStatement pstmt = ServerContext.getConnection().prepareStatement(
+                    "UPDATE files SET is_deleted = 1, delete_time = CURRENT_TIMESTAMP WHERE id = ?")) {
+                pstmt.setInt(1, fileId);
+                pstmt.executeUpdate();
+            }
+        }
+
+        private void moveFileToRecycle(FileMeta meta) throws IOException {
+            if (meta.path() == null || meta.path().startsWith("folder://")) {
+                return;
+            }
+            Path sourcePath = Paths.get(meta.path());
+            if (!Files.exists(sourcePath)) {
+                return;
+            }
+            Path recycleDir = Paths.get(HttpFileServer.RECYCLE_DIR);
+            if (!Files.exists(recycleDir)) {
+                Files.createDirectories(recycleDir);
+            }
+            Path targetPath = recycleDir.resolve(meta.name());
+            if (Files.exists(targetPath)) {
+                targetPath = recycleDir.resolve(System.currentTimeMillis() + "_" + meta.name());
+            }
+            Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        private record FileMeta(int id, String name, String path, String type) {
+            private boolean isFolder() {
+                return type != null && type.equalsIgnoreCase("folder");
             }
         }
     }

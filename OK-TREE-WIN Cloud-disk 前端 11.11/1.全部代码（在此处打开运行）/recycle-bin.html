@@ -9,6 +9,7 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="api.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -375,6 +376,11 @@
                 },
                 // 加载回收站文件（调用后端 /api/recycle-bin）
                 async loadRecycleFiles() {
+                    if (!window.CloudApi || typeof CloudApi.apiGet !== 'function') {
+                        console.error('CloudApi 未加载，无法请求回收站数据');
+                        alert('页面缺少 api.js，暂时无法获取回收站数据，请刷新或检查引用。');
+                        return;
+                    }
                     try {
                         const res = await CloudApi.apiGet('/recycle-bin');
                         let list = [];
