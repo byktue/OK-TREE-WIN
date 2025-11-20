@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的分享 - 云盘存储</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="style_2.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#4080FF',
+                        neutral: '#F5F7FA',
+                        dark: '#1D2129',
+                        'gray-light': '#C9CDD4'
+                    },
+                    fontFamily: {
+                        inter: ['Inter', 'system-ui', 'sans-serif']
+                    },
+                    boxShadow: {
+                        'card': '0 2px 10px rgba(0, 0, 0, 0.05)',
+                        'hover': '0 5px 15px rgba(22, 93, 255, 0.08)'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="font-inter bg-neutral min-h-screen flex flex-col text-dark overflow-hidden">
+    <div id="app">
+        <MySharesPage></MySharesPage>
+    </div>
+
+    <script>
+        // 登录验证 - 与其他页面保持一致
+        if (!localStorage.getItem('cloudDiskToken')) {
+            window.location.href = 'login.html';
+        }
+
+        // 工具函数：格式化日期
+        const formatDate = (dateString) => {
+            const date = new Date(dateString);
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        };
+
+        // 工具函数：格式化文件大小
+        const formatSize = (bytes) => {
+            if (bytes < 1024) return `${bytes} B`;
+            else if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+            else if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+            else return `${(bytes / 1073741824).toFixed(1)} GB`;
+        };
+
+        // 工具函数：获取文件图标类名
+        const getFileIconClass = (type) => {
+            switch(type) {
+                case 'folder': return 'fa-folder text-yellow-400';
+                case 'image': return 'fa-image text-green-500';
+                case 'doc': return 'fa-file-text text-blue-500';
+                case 'video': return 'fa-video-camera text-purple-500';
+                case 'audio': return 'fa-music text-red-500';
+                case 'pdf': return 'fa-file-pdf-o text-red-500';
+                default: return 'fa-file-o text-gray-400';
+            }
+        };
+
+        // 头部组件 - 与其他页面保持一致
+        const Header = {
+            template: `
+                <header class="header">
+                    <div class="header-left">
+                        <button @click="toggleSidebar" class="sidebar-toggle md:hidden">
+                            <i class="fa fa-bars"></i>
+                        </button>
+                        <div class="logo-container">
+                            <i class="logo-icon fa fa-cloud"></i>
+                            <span class="logo-text">云盘存储</span>
+                        </div>
+                    </div>
+                    
+                    <div class="header-right">
+                        <div class="search-container">
+                            <input 
+                                type="text" 
+                                placeholder="搜索文件和文件夹..." 
+                                class="search-input"
+                                v-model="searchQuery"
+                                @input="handleSearch"
+                            >
+                            <i class="search-icon fa fa-search"></i>
+                        </div>
+                        
+                        <div class="user-menu-container" @click="showUserMenu = !showUserMenu">
+                            <button class="user-menu-button">
+                                <span class="user-name">{{ userName }}</span>
+                                <i class="dropdown-icon fa fa-chevron-down"></i>
+                            </button>
+                            
+                            <div v-if="showUserMenu" class="user-menu">
+                                <a href="profile.html" class="user-menu-item">
+                                    <i class="fa fa-user"></i> 个人中心
+                                </a>
+                                <a href="storage.html" class="user-menu-item">
+                                    <i class="fa fa-hdd-o"></i> 存储情况
+                                </a>
+                                <div class="divider"></div>
+                                <button class="user-menu-item logout-button" @click="logout">
+                                    <i class="fa fa-sign-out"></i> 退出登录
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+            `,
+            data() {
+                return {
+                    searchQuery: '',
+                    showUserMenu: false,
+                    userName: '用户名称'
+                };
+            },
+            methods: {
+                toggleSidebar() {
+                    this.$emit('toggle-sidebar');
+                },
+                handleSearch() {
+                    this.$emit('search', this.searchQuery);
+                },
+                logout() {
+                    localStorage.removeItem('cloudDiskToken');
+                    window.location.href = 'login.html';
+                }
+            }
+        };
+
+        // 侧边栏组件 - 与其他页面保持一致，当前高亮"我的分享"
+        const Sidebar = {
+            template: `
+                <aside :class="['sidebar', isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0']">
+                    <div class="sidebar-content">
+                        <div class="sidebar-section">
+                            <div class="sidebar-item" :class="{ active: activeCategory === 'all' }" @click="navigateTo('file-manager.html')">
+                                <i class="sidebar-icon fa fa-folder"></i>
+                                <span class="sidebar-text">文件库</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('recycle-bin.html')">
+                                <i class="sidebar-icon fa fa-trash"></i>
+                                <span class="sidebar-text">回收站</span>
+                            </div>
+                            <div class="sidebar-item active" @click="navigateTo('my-shares.html')">
+                                <i class="sidebar-icon fa fa-share-alt"></i>
+                                <span class="sidebar-text">我的分享</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('sync-folder.html')">
+                                <i class="sidebar-icon fa fa-book"></i>
+                                <span class="sidebar-text">同步文件夹</span>
+                            </div>
+                        </div>
+                        
+                        <div class="sidebar-section">
+                            <div class="sidebar-title">文件分类</div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?type=image')">
+                                <i class="sidebar-icon fa fa-image"></i>
+                                <span class="sidebar-text">图片</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?type=doc')">
+                                <i class="sidebar-icon fa fa-file-text"></i>
+                                <span class="sidebar-text">文档</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?type=video')">
+                                <i class="sidebar-icon fa fa-video-camera"></i>
+                                <span class="sidebar-text">视频</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?type=audio')">
+                                <i class="sidebar-icon fa fa-music"></i>
+                                <span class="sidebar-text">音频</span>
+                            </div>
+                        </div>
+                        
+                        <!-- 存储使用情况 -->
+                        <div class="storage-info">
+                            <div class="storage-title">存储空间</div>
+                            <div class="storage-stats">
+                                <span>{{ usedStorage }} GB</span>
+                                <span>{{ usedPercent }}% 已使用</span>
+                            </div>
+                            <div class="storage-bar">
+                                <div class="storage-progress" :style="{ width: usedPercent + '%' }"></div>
+                            </div>
+                            <div class="storage-total">总计 {{ totalStorage }} GB</div>
+                            <button class="upgrade-button">升级存储空间</button>
+                        </div>
+                    </div>
+                </aside>
+            `,
+            props: ['isOpen', 'activeCategory'],
+            data() {
+                return {
+                    usedStorage: '2.5',
+                    totalStorage: '10',
+                    usedPercent: 25
+                };
+            },
+            methods: {
+                navigateTo(url) {
+                    window.location.href = url;
+                }
+            }
+        };
+
+        // 分享项组件
+        const ShareItem = {
+            props: ['share', 'onEdit', 'onCancel'],
+            template: `
+                <div class="file-item bg-white rounded-lg shadow-card hover:shadow-hover transition-all p-4 mb-3 flex items-center justify-between">
+                    <div class="flex items-center gap-4">
+                        <div class="text-2xl">
+                            <i :class="getFileIconClass(share.fileType)"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-medium">{{ share.fileName }}</h3>
+                            <p class="text-sm text-gray-light mt-1">
+                                分享于 {{ formatDate(share.shareTime) }}
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="hidden md:flex items-center gap-6">
+                        <div class="text-center">
+                            <p class="text-sm text-gray-light">浏览</p>
+                            <p class="font-medium">{{ share.viewCount }}</p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-sm text-gray-light">下载</p>
+                            <p class="font-medium">{{ share.downloadCount }}</p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-sm text-gray-light">有效期</p>
+                            <p class="font-medium">{{ share.expiryDate || '永久' }}</p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-sm text-gray-light">提取码</p>
+                            <p class="font-medium">{{ share.hasPassword ? '已设置' : '无' }}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-2">
+                        <button 
+                            class="p-2 text-gray-light hover:text-primary transition-colors"
+                            @click="copyLink"
+                            title="复制链接"
+                        >
+                            <i class="fa fa-link"></i>
+                        </button>
+                        <button 
+                            class="p-2 text-gray-light hover:text-primary transition-colors"
+                            @click="$emit('onEdit', share.id)"
+                            title="编辑分享"
+                        >
+                            <i class="fa fa-pencil"></i>
+                        </button>
+                        <button 
+                            class="p-2 text-gray-light hover:text-red-500 transition-colors"
+                            @click="$emit('onCancel', share.id)"
+                            title="取消分享"
+                        >
+                            <i class="fa fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            `,
+            methods: {
+                formatDate,
+                getFileIconClass,
+                copyLink() {
+                    // 复制链接到剪贴板
+                    navigator.clipboard.writeText(this.share.shareLink)
+                        .then(() => {
+                            alert('分享链接已复制到剪贴板');
+                        })
+                        .catch(err => {
+                            console.error('无法复制链接: ', err);
+                        });
+                }
+            }
+        };
+
+        // 编辑分享设置弹窗
+    const ShareSettingsModal = {
+        props: ['share', 'visible', 'onSave', 'onClose'],
+        data() {
+            return {
+                formData: {
+                    expiryType: '7days',
+                    hasPassword: false,
+                    password: ''
+                }
+            };
+        },
+        watch: {
+            share(newVal) {
+                if (newVal) {
+                    // 初始化表单数据
+                    this.formData.hasPassword = newVal.hasPassword || false;
+                    this.formData.password = newVal.password || '';
+                    
+                    // 设置过期类型
+                    if (newVal.expiryDate === '永久') {
+                        this.formData.expiryType = 'forever';
+                    } else if (newVal.expiryDate === '1天') {
+                        this.formData.expiryType = '1day';
+                    } else if (newVal.expiryDate === '7天') {
+                        this.formData.expiryType = '7days';
+                    } else if (newVal.expiryDate === '30天') {
+                        this.formData.expiryType = '30days';
+                    }
+                }
+            }
+        },
+        template: `
+            <div v-if="visible" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+                <div class="bg-white rounded-xl shadow-xl w-full max-w-md transform transition-all duration-300 scale-100">
+                    <div class="modal-header p-6 border-b">
+                        <h3 class="modal-title text-xl font-semibold">编辑分享设置</h3>
+                        <button class="modal-close text-gray-light hover:text-dark transition-colors" @click="$emit('onClose')">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="modal-body p-6">
+                        <!-- 分享链接区域 -->
+                        <div class="form-group mb-6">
+                            <label class="form-label block text-sm font-medium text-gray-700 mb-2">分享链接</label>
+                            <div class="flex">
+                                <input type="text" class="form-input flex-1 rounded-l-lg border-r-0 py-2 px-3 border-gray-300 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none transition-all" :value="share.shareLink" readonly>
+                                <button class="btn-secondary bg-primary/10 hover:bg-primary/20 text-primary rounded-r-lg px-4 transition-colors" @click="copyLink">
+                                    <i class="fa fa-copy mr-1"></i> 复制
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- 有效期设置 -->
+                        <div class="form-group mb-6">
+                            <label class="form-label block text-sm font-medium text-gray-700 mb-2">有效期</label>
+                            <select class="form-select w-full rounded-lg py-2 px-3 border-gray-300 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none transition-all appearance-none bg-white pr-8" v-model="formData.expiryType">
+                                <option value="1day">1天</option>
+                                <option value="7days">7天</option>
+                                <option value="30days">30天</option>
+                                <option value="forever">永久有效</option>
+                            </select>
+                        </div>
+                        
+                        <!-- 提取码设置 -->
+                        <div class="form-group mb-2">
+                            <label class="form-checkbox flex items-center cursor-pointer">
+                                <input type="checkbox" v-model="formData.hasPassword" class="form-checkbox h-4 w-4 text-primary focus:ring-primary/30 rounded">
+                                <span class="ml-2 text-sm font-medium text-gray-700">设置提取码</span>
+                            </label>
+                        </div>
+                        
+                        <div class="form-group mb-6" v-if="formData.hasPassword">
+                            <label class="form-label block text-sm font-medium text-gray-700 mb-2">提取码</label>
+                            <input type="text" class="form-input w-full rounded-lg py-2 px-3 border-gray-300 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none transition-all" v-model="formData.password" placeholder="请输入4位数字或字母" maxlength="4">
+                            <p class="text-xs text-gray-500 mt-1">请设置4位数字或字母作为提取码</p>
+                        </div>
+                        
+                        <!-- 分享信息摘要 -->
+                        <div class="bg-neutral rounded-lg p-4 mb-2">
+                            <div class="text-sm text-gray-600 mb-1">分享对象：</div>
+                            <div class="text-sm font-medium">任何人可通过链接访问</div>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-footer p-6 border-t flex justify-end gap-3">
+                        <button class="btn-secondary px-5 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-gray-700 transition-colors" @click="$emit('onClose')">取消</button>
+                        <button class="btn-primary px-5 py-2 rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors" @click="$emit('onSave', formData)">保存设置</button>
+                    </div>
+                </div>
+            </div>
+        `,
+        methods: {
+            copyLink() {
+                navigator.clipboard.writeText(this.share.shareLink)
+                    .then(() => {
+                        // 显示复制成功的反馈
+                        const originalText = this.$el.querySelector('.btn-secondary').innerHTML;
+                        this.$el.querySelector('.btn-secondary').innerHTML = '<i class="fa fa-check mr-1"></i> 已复制';
+                        
+                        setTimeout(() => {
+                            this.$el.querySelector('.btn-secondary').innerHTML = originalText;
+                        }, 2000);
+                    });
+            }
+        }
+    };
+
+        // 主页面组件
+        const MySharesPage = {
+            components: {
+                Header,
+                Sidebar,
+                ShareItem,
+                ShareSettingsModal
+            },
+            data() {
+                return {
+                    sidebarOpen: true,
+                    searchQuery: '',
+                    shares: [],
+                    loading: true,
+                    currentShare: null,
+                    showSettingsModal: false
+                };
+            },
+            async mounted() {
+                // 模拟从后端获取分享列表
+                await this.fetchShares();
+            },
+            methods: {
+                toggleSidebar() {
+                    this.sidebarOpen = !this.sidebarOpen;
+                },
+                handleSearch(query) {
+                    this.searchQuery = query;
+                    // 实际项目中可以在这里添加搜索过滤逻辑
+                },
+                async fetchShares() {
+                    // 模拟API请求
+                    this.loading = true;
+                    try {
+                        // 模拟分享数据
+                        this.shares = [
+                            {
+                                id: 1,
+                                fileName: '项目计划书.pdf',
+                                fileType: 'pdf',
+                                fileSize: 2097152,
+                                shareTime: '2023-11-10T09:30:00',
+                                shareLink: 'https://cloud-disk.example.com/s/8f7d6c5b4a3',
+                                viewCount: 12,
+                                downloadCount: 5,
+                                expiryDate: '7天',
+                                hasPassword: true,
+                                password: '1234'
+                            },
+                            {
+                                id: 2,
+                                fileName: '产品原型图',
+                                fileType: 'folder',
+                                fileSize: 0,
+                                shareTime: '2023-11-05T14:20:00',
+                                shareLink: 'https://cloud-disk.example.com/s/2a3b4c5d6e7',
+                                viewCount: 8,
+                                downloadCount: 3,
+                                expiryDate: '30天',
+                                hasPassword: false
+                            },
+                            {
+                                id: 3,
+                                fileName: '会议记录.docx',
+                                fileType: 'doc',
+                                fileSize: 524288,
+                                shareTime: '2023-10-28T16:45:00',
+                                shareLink: 'https://cloud-disk.example.com/s/9e8d7c6b5a4',
+                                viewCount: 23,
+                                downloadCount: 11,
+                                expiryDate: '永久',
+                                hasPassword: false
+                            },
+                            {
+                                id: 4,
+                                fileName: '演示视频.mp4',
+                                fileType: 'video',
+                                fileSize: 15728640,
+                                shareTime: '2023-11-12T10:15:00',
+                                shareLink: 'https://cloud-disk.example.com/s/1b2c3d4e5f6',
+                                viewCount: 5,
+                                downloadCount: 2,
+                                expiryDate: '1天',
+                                hasPassword: true,
+                                password: 'abcd'
+                            }
+                        ];
+                    } catch (error) {
+                        console.error('获取分享列表失败:', error);
+                        alert('获取分享列表失败，请重试');
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+                editShare(shareId) {
+                    this.currentShare = this.shares.find(share => share.id === shareId);
+                    this.showSettingsModal = true;
+                },
+                saveShareSettings(formData) {
+                    // 模拟保存设置到后端
+                    if (this.currentShare) {
+                        const index = this.shares.findIndex(share => share.id === this.currentShare.id);
+                        if (index !== -1) {
+                            // 更新过期日期显示文本
+                            const expiryTextMap = {
+                                '1day': '1天',
+                                '7days': '7天',
+                                '30days': '30天',
+                                'forever': '永久'
+                            };
+                            
+                            this.shares[index] = {
+                                ...this.shares[index],
+                                expiryDate: expiryTextMap[formData.expiryType],
+                                hasPassword: formData.hasPassword,
+                                password: formData.password
+                            };
+                            
+                            // 模拟API请求成功
+                            alert('分享设置已更新');
+                            this.showSettingsModal = false;
+                        }
+                    }
+                },
+                cancelShare(shareId) {
+                    if (confirm('确定要取消此分享吗？取消后链接将失效。')) {
+                        // 模拟取消分享API请求
+                        this.shares = this.shares.filter(share => share.id !== shareId);
+                        alert('分享已取消');
+                    }
+                },
+                closeSettingsModal() {
+                    this.showSettingsModal = false;
+                }
+            },
+            computed: {
+                filteredShares() {
+                    if (!this.searchQuery) return this.shares;
+                    const query = this.searchQuery.toLowerCase();
+                    return this.shares.filter(share => 
+                        share.fileName.toLowerCase().includes(query)
+                    );
+                }
+            },
+            template: `
+                <div class="flex flex-col h-screen">
+                    <!-- 头部 -->
+                    <Header 
+                        @toggle-sidebar="toggleSidebar" 
+                        @search="handleSearch"
+                    ></Header>
+                    
+                    <div class="flex flex-1 overflow-hidden">
+                        <!-- 侧边栏 -->
+                        <Sidebar 
+                            :is-open="sidebarOpen" 
+                            active-category="shares"
+                        ></Sidebar>
+                        
+                        <!-- 主内容区 -->
+                        <main class="flex-1 overflow-auto p-4 md:p-6">
+                            <div class="max-w-6xl mx-auto">
+                                <div class="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+                                    <div>
+                                        <h1 class="text-2xl font-bold">我的分享</h1>
+                                        <p class="text-gray-light mt-1">共 {{ shares.length }} 个文件/文件夹被分享</p>
+                                    </div>
+                                </div>
+                                
+                                <!-- 搜索结果提示 -->
+                                <div v-if="searchQuery" class="mb-4 text-sm text-gray-light">
+                                    搜索 "{{ searchQuery }}"，找到 {{ filteredShares.length }} 个结果
+                                </div>
+                                
+                                <!-- 加载状态 -->
+                                <div v-if="loading" class="flex flex-col items-center justify-center py-12">
+                                    <i class="fa fa-spinner fa-spin text-3xl text-primary mb-4"></i>
+                                    <p>加载分享列表中...</p>
+                                </div>
+                                
+                                <!-- 空状态 -->
+                                <div v-else-if="filteredShares.length === 0" class="bg-white rounded-lg shadow-card p-8 text-center">
+                                    <i class="fa fa-share-alt text-5xl text-gray-light mb-4"></i>
+                                    <h3 class="text-lg font-medium mb-2">暂无分享内容</h3>
+                                    <p class="text-gray-light mb-6">您还没有分享任何文件或文件夹</p>
+                                    <button class="btn-primary" onclick="window.location.href='file-manager.html'">
+                                        <i class="fa fa-plus mr-2"></i> 去分享文件
+                                    </button>
+                                </div>
+                                
+                                <!-- 分享列表 -->
+                                <div v-else class="space-y-3">
+                                    <ShareItem 
+                                        v-for="share in filteredShares" 
+                                        :key="share.id"
+                                        :share="share"
+                                        @on-edit="editShare"
+                                        @on-cancel="cancelShare"
+                                    ></ShareItem>
+                                </div>
+                            </div>
+                        </main>
+                    </div>
+                    
+                    <!-- 分享设置弹窗 -->
+                    <ShareSettingsModal
+                        :share="currentShare"
+                        :visible="showSettingsModal"
+                        @on-save="saveShareSettings"
+                        @on-close="closeSettingsModal"
+                    ></ShareSettingsModal>
+                </div>
+            `
+        };
+
+        // 创建并挂载Vue应用
+        const { createApp } = Vue;
+        createApp(MySharesPage).mount('#app');
+    </script>
+</body>
+</html>

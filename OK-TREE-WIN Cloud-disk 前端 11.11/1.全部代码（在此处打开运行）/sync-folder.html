@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>同步文件夹 - 云盘存储</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="style_2.css">
+    <script src="api.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#4080FF',
+                        neutral: '#F5F7FA',
+                        dark: '#1D2129',
+                        'gray-light': '#C9CDD4',
+                        'sync-success': '#00B42A',
+                        'sync-warning': '#FF7D00',
+                        'sync-pending': '#86909C'
+                    },
+                    fontFamily: {
+                        inter: ['Inter', 'system-ui', 'sans-serif']
+                    },
+                    boxShadow: {
+                        'card': '0 2px 10px rgba(0, 0, 0, 0.05)',
+                        'hover': '0 5px 15px rgba(22, 93, 255, 0.08)'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .file-item {
+            transition: all 0.3s ease;
+        }
+        .file-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(22, 93, 255, 0.08);
+        }
+        .sync-overview {
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e7f1 100%);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .sync-status-indicator {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .sync-status-icon {
+            width: 64px;
+            height: 64px;
+            background: rgba(22, 93, 255, 0.1);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 16px;
+        }
+        .sync-status-icon i {
+            font-size: 28px;
+            color: #165DFF;
+        }
+        .main-status {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1D2129;
+            margin-bottom: 4px;
+        }
+        .sub-status {
+            font-size: 14px;
+            color: #86909C;
+        }
+        .btn-primary {
+            background: #165DFF;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+        .btn-primary:hover {
+            background: #0050b3;
+        }
+        .btn-secondary {
+            background: #f0f3ff;
+            color: #165DFF;
+            border: 1px solid #d2d8f7;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        .btn-secondary:hover {
+            background: #e4e7f1;
+        }
+        .view-tabs {
+            display: flex;
+            background: white;
+            border-radius: 12px;
+            padding: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+        .view-tab {
+            flex: 1;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        .view-tab.active {
+            background: #165DFF;
+            color: white;
+        }
+        .view-tab:not(.active):hover {
+            background: #f5f7fa;
+        }
+        .sort-controls select {
+            padding: 8px 16px;
+            border: 1px solid #d2d8f7;
+            border-radius: 8px;
+            background: white;
+            font-size: 14px;
+        }
+        .file-list-header {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            padding: 16px 24px;
+            background: #f8fafc;
+            border-radius: 12px 12px 0 0;
+            font-weight: 600;
+            color: #64748b;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .file-list {
+            background: white;
+            border-radius: 0 0 12px 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+        .empty-state {
+            text-align: center;
+            padding: 64px 24px;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+        .empty-state i {
+            opacity: 0.3;
+        }
+        .more-menu {
+            position: absolute;
+            right: 0;
+            top: 100%;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            padding: 8px 0;
+            z-index: 100;
+            min-width: 150px;
+        }
+        .more-menu button {
+            width: 100%;
+            padding: 8px 16px;
+            text-align: left;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .more-menu button:hover {
+            background: #f8fafc;
+        }
+        .file-actions {
+            position: relative;
+        }
+        .action-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            border: none;
+            background: #f8fafc;
+            color: #64748b;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .action-btn:hover {
+            background: #e2e8f0;
+            color: #1e293b;
+        }
+    </style>
+</head>
+<body class="font-inter bg-neutral min-h-screen flex flex-col text-dark overflow-hidden">
+    <div id="app">
+        <SyncFolder></SyncFolder>
+    </div>
+
+    <script>
+        // 登录验证
+        if (!localStorage.getItem('cloudDiskToken')) {
+            window.location.href = 'login.html';
+        }
+
+        // 工具函数：格式化日期
+        const formatDate = (dateString) => {
+            const date = new Date(dateString);
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        };
+
+        // 工具函数：格式化文件大小
+        const formatSize = (bytes) => {
+            if (bytes < 1024) return `${bytes} B`;
+            else if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+            else if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+            else return `${(bytes / 1073741824).toFixed(1)} GB`;
+        };
+
+        // 工具函数：获取文件图标类名
+        const getFileIconClass = (type) => {
+            switch(type) {
+                case 'folder': return 'fa-folder text-yellow-400';
+                case 'image': return 'fa-image text-green-500';
+                case 'doc': return 'fa-file-text text-blue-500';
+                case 'video': return 'fa-video-camera text-purple-500';
+                case 'audio': return 'fa-music text-red-500';
+                case 'pdf': return 'fa-file-pdf-o text-red-500';
+                default: return 'fa-file-o text-gray-400';
+            }
+        };
+
+        // 工具函数：获取同步状态文本
+        const getSyncStatusText = (status) => {
+            switch(status) {
+                case 'synced': return '已同步';
+                case 'syncing': return '同步中';
+                case 'pending': return '等待同步';
+                case 'error': return '同步失败';
+                default: return '未知状态';
+            }
+        };
+
+        // 工具函数：获取同步状态样式
+        const getSyncStatusClass = (status) => {
+            switch(status) {
+                case 'synced': return 'text-sync-success';
+                case 'syncing': return 'text-primary';
+                case 'pending': return 'text-sync-pending';
+                case 'error': return 'text-red-500';
+                default: return 'text-gray-light';
+            }
+        };
+
+        // 工具函数：获取同步状态图标
+        const getSyncStatusIcon = (status) => {
+            switch(status) {
+                case 'synced': return 'fa-check-circle';
+                case 'syncing': return 'fa-spinner fa-spin';
+                case 'pending': return 'fa-clock-o';
+                case 'error': return 'fa-exclamation-circle';
+                default: return 'fa-question-circle';
+            }
+        };
+
+        // 头部组件
+        const Header = {
+            template: `
+                <header class="header">
+                    <div class="header-left">
+                        <button @click="toggleSidebar" class="sidebar-toggle md:hidden">
+                            <i class="fa fa-bars"></i>
+                        </button>
+                        <div class="logo-container">
+                            <i class="logo-icon fa fa-cloud"></i>
+                            <span class="logo-text">云盘存储</span>
+                        </div>
+                    </div>
+                    
+                    <div class="header-right">
+                        <div class="search-container">
+                            <input 
+                                type="text" 
+                                placeholder="搜索文件和文件夹..." 
+                                class="search-input"
+                                v-model="searchQuery"
+                                @input="handleSearch"
+                            >
+                            <i class="search-icon fa fa-search"></i>
+                        </div>
+                        
+                        <div class="user-menu-container" @click="showUserMenu = !showUserMenu">
+                            <button class="user-menu-button">
+                                <span class="user-name">{{ userName }}</span>
+                                <i class="dropdown-icon fa fa-chevron-down"></i>
+                            </button>
+                            
+                            <div v-if="showUserMenu" class="user-menu">
+                                <a href="profile.html" class="user-menu-item">
+                                    <i class="fa fa-user"></i> 个人中心
+                                </a>
+                                <a href="storage.html" class="user-menu-item">
+                                    <i class="fa fa-hdd-o"></i> 存储情况
+                                </a>
+                                <div class="divider"></div>
+                                <button class="user-menu-item logout-button" @click="logout">
+                                    <i class="fa fa-sign-out"></i> 退出登录
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+            `,
+            data() {
+                return {
+                    searchQuery: '',
+                    showUserMenu: false,
+                    userName: '用户名称'
+                };
+            },
+            methods: {
+                toggleSidebar() {
+                    this.$emit('toggle-sidebar');
+                },
+                handleSearch() {
+                    this.$emit('search', this.searchQuery);
+                },
+                logout() {
+                    localStorage.removeItem('cloudDiskToken');
+                    window.location.href = 'login.html';
+                }
+            }
+        };
+
+        // 侧边栏组件
+        const Sidebar = {
+            template: `
+                <aside :class="['sidebar', isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0']">
+                    <div class="sidebar-content">
+                        <div class="sidebar-section">
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html')">
+                                <i class="sidebar-icon fa fa-folder"></i>
+                                <span class="sidebar-text">文件库</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('recycle-bin.html')">
+                                <i class="sidebar-icon fa fa-trash"></i>
+                                <span class="sidebar-text">回收站</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('my-shares.html')">
+                                <i class="sidebar-icon fa fa-share-alt"></i>
+                                <span class="sidebar-text">我的分享</span>
+                            </div>
+                            <div class="sidebar-item active" @click="navigateTo('sync-folder.html')">
+                                <i class="sidebar-icon fa fa-book"></i>
+                                <span class="sidebar-text">同步文件夹</span>
+                            </div>
+                        </div>
+                        
+                        <div class="sidebar-section">
+                            <div class="sidebar-title">文件分类</div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?category=image')">
+                                <i class="sidebar-icon fa fa-image"></i>
+                                <span class="sidebar-text">图片</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?category=doc')">
+                                <i class="sidebar-icon fa fa-file-text"></i>
+                                <span class="sidebar-text">文档</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?category=video')">
+                                <i class="sidebar-icon fa fa-video-camera"></i>
+                                <span class="sidebar-text">视频</span>
+                            </div>
+                            <div class="sidebar-item" @click="navigateTo('file-manager.html?category=audio')">
+                                <i class="sidebar-icon fa fa-music"></i>
+                                <span class="sidebar-text">音频</span>
+                            </div>
+                        </div>
+                        
+                        <!-- 存储使用情况 -->
+                        <div class="storage-info">
+                            <div class="storage-title">存储空间</div>
+                            <div class="storage-stats">
+                                <span>{{ storageInfo.usedGb }} GB</span>
+                                <span>{{ storageInfo.usedPercent }}% 已使用</span>
+                            </div>
+                            <div class="storage-bar">
+                                <div 
+                                    class="storage-progress"
+                                    :style="{ width: storageInfo.usedPercent + '%' }"
+                                ></div>
+                            </div>
+                            <div class="storage-total">总计 {{ storageInfo.totalGb }} GB</div>
+                            <button class="upgrade-button">升级存储空间</button>
+                        </div>
+                    </div>
+                </aside>
+            `,
+            props: ['isOpen', 'storageInfo'],
+            methods: {
+                navigateTo(url) {
+                    window.location.href = url;
+                }
+            }
+        };
+
+        // 同步文件夹列表项组件
+        const SyncFolderItem = {
+            template: `
+                <div class="file-item bg-white rounded-xl p-4 mb-3 border border-gray-100 hover:shadow-md transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center flex-1">
+                            <div class="file-icon w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center mr-4">
+                                <i class="fa fa-folder text-xl text-blue-500"></i>
+                            </div>
+                            <div class="flex-1">
+                                <div class="file-name font-semibold text-gray-800">{{ folder.name }}</div>
+                                <div class="file-meta text-sm text-gray-500 mt-1">
+                                    <span>{{ folder.fileCount }} 个文件</span>
+                                    <span class="mx-2">•</span>
+                                    <span>{{ formatSize(folder.totalSize) }}</span>
+                                    <span class="mx-2">•</span>
+                                    <span>本地路径: {{ folder.localPath }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-4">
+                            <div class="file-sync-status flex items-center">
+                                <i class="fa mr-2" :class="[getSyncStatusIcon(folder.syncStatus), getSyncStatusClass(folder.syncStatus)]"></i>
+                                <span :class="getSyncStatusClass(folder.syncStatus)">{{ getSyncStatusText(folder.syncStatus) }}</span>
+                            </div>
+                            <div class="file-modified text-sm text-gray-500">{{ formatDate(folder.lastSyncTime) }}</div>
+                            <div class="file-actions relative">
+                                <button class="action-btn" @click.stop="handleSyncNow">
+                                    <i class="fa fa-refresh"></i>
+                                </button>
+                                <button class="action-btn" @click.stop="toggleMoreMenu">
+                                    <i class="fa fa-ellipsis-v"></i>
+                                </button>
+                                <div v-if="showMoreMenu" class="more-menu" @click.stop>
+                                    <button @click="handleOpen">打开</button>
+                                    <button @click="handleDownload">下载全部</button>
+                                    <button @click="handleRename">重命名</button>
+                                    <button @click="handleRemoveSync" class="text-red-500">取消同步</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `,
+            props: ['folder'],
+            data() {
+                return {
+                    showMoreMenu: false
+                };
+            },
+            methods: {
+                formatDate,
+                formatSize,
+                getSyncStatusText,
+                getSyncStatusClass,
+                getSyncStatusIcon,
+                toggleMoreMenu() {
+                    this.showMoreMenu = !this.showMoreMenu;
+                },
+                handleSyncNow() {
+                    this.$emit('sync-now', this.folder.id);
+                },
+                handleOpen() {
+                    this.showMoreMenu = false;
+                    this.$emit('open', this.folder.id);
+                },
+                handleDownload() {
+                    this.showMoreMenu = false;
+                    this.$emit('download', this.folder.id);
+                },
+                handleRename() {
+                    this.showMoreMenu = false;
+                    this.$emit('rename', this.folder.id);
+                },
+                handleRemoveSync() {
+                    this.showMoreMenu = false;
+                    this.$emit('remove-sync', this.folder.id);
+                }
+            }
+        };
+
+        // 同步文件列表项组件
+        const SyncFileItem = {
+            template: `
+                <div class="file-item bg-white rounded-xl p-4 mb-3 border border-gray-100 hover:shadow-md transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center flex-1">
+                            <div class="file-icon w-12 h-12 bg-gray-50 rounded-lg flex items-center justify-center mr-4">
+                                <i class="fa text-xl" :class="getFileIconClass(file.type)"></i>
+                            </div>
+                            <div class="flex-1">
+                                <div class="file-name font-semibold text-gray-800">{{ file.name }}</div>
+                                <div class="file-meta text-sm text-gray-500 mt-1">
+                                    <span>{{ file.type === 'folder' ? file.fileCount + ' 个文件' : formatSize(file.size) }}</span>
+                                    <span class="mx-2">•</span>
+                                    <span>所属文件夹: {{ file.folderName }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-4">
+                            <div class="file-sync-status flex items-center">
+                                <i class="fa mr-2" :class="[getSyncStatusIcon(file.syncStatus), getSyncStatusClass(file.syncStatus)]"></i>
+                                <span :class="getSyncStatusClass(file.syncStatus)">{{ getSyncStatusText(file.syncStatus) }}</span>
+                            </div>
+                            <div class="file-modified text-sm text-gray-500">{{ formatDate(file.lastSyncTime) }}</div>
+                            <div class="file-actions relative">
+                                <button class="action-btn" @click.stop="handleSyncNow">
+                                    <i class="fa fa-refresh"></i>
+                                </button>
+                                <button class="action-btn" @click.stop="toggleMoreMenu">
+                                    <i class="fa fa-ellipsis-v"></i>
+                                </button>
+                                <div v-if="showMoreMenu" class="more-menu" @click.stop>
+                                    <button @click="handleOpen">打开</button>
+                                    <button @click="handleDownload">下载</button>
+                                    <button @click="handlePreview" v-if="file.type !== 'folder'">预览</button>
+                                    <button @click="handleRemoveSync" class="text-red-500">取消同步</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `,
+            props: ['file'],
+            data() {
+                return {
+                    showMoreMenu: false
+                };
+            },
+            methods: {
+                formatDate,
+                formatSize,
+                getFileIconClass,
+                getSyncStatusText,
+                getSyncStatusClass,
+                getSyncStatusIcon,
+                toggleMoreMenu() {
+                    this.showMoreMenu = !this.showMoreMenu;
+                },
+                handleSyncNow() {
+                    this.$emit('sync-now', this.file.id);
+                },
+                handleOpen() {
+                    this.showMoreMenu = false;
+                    this.$emit('open', this.file.id);
+                },
+                handleDownload() {
+                    this.showMoreMenu = false;
+                    this.$emit('download', this.file.id);
+                },
+                handlePreview() {
+                    this.showMoreMenu = false;
+                    this.$emit('preview', this.file.id);
+                },
+                handleRemoveSync() {
+                    this.showMoreMenu = false;
+                    this.$emit('remove-sync', this.file.id);
+                }
+            }
+        };
+
+        // 同步状态概览组件
+        const SyncStatusOverview = {
+            template: `
+                <div class="sync-overview">
+                    <div class="sync-status-indicator">
+                        <div class="sync-status-icon">
+                            <i class="fa" :class="syncStatusClass"></i>
+                        </div>
+                        <div class="sync-status-text">
+                            <div class="main-status">{{ mainStatusText }}</div>
+                            <div class="sub-status">{{ subStatusText }}</div>
+                        </div>
+                    </div>
+                    <div class="sync-actions flex space-x-3">
+                        <button class="btn-primary" @click="syncAllNow">
+                            <i class="fa fa-refresh mr-1"></i> 立即同步全部
+                        </button>
+                        <button class="btn-secondary" @click="showSyncSettings">
+                            <i class="fa fa-cog mr-1"></i> 同步设置
+                        </button>
+                    </div>
+                </div>
+            `,
+            props: ['syncSummary'],
+            computed: {
+                mainStatusText() {
+                    if (this.syncSummary.errorCount > 0) {
+                        return `有 ${this.syncSummary.errorCount} 个文件同步失败`;
+                    } else if (this.syncSummary.syncingCount > 0) {
+                        return `正在同步 ${this.syncSummary.syncingCount} 个文件`;
+                    } else {
+                        return '所有文件已同步完成';
+                    }
+                },
+                subStatusText() {
+                    return `共 ${this.syncSummary.totalCount} 个文件，${this.syncSummary.syncedCount} 个已同步`;
+                },
+                syncStatusClass() {
+                    if (this.syncSummary.errorCount > 0) {
+                        return 'fa-exclamation-circle text-red-500';
+                    } else if (this.syncSummary.syncingCount > 0) {
+                        return 'fa-spinner fa-spin text-primary';
+                    } else {
+                        return 'fa-check-circle text-sync-success';
+                    }
+                }
+            },
+            methods: {
+                syncAllNow() {
+                    this.$emit('sync-all');
+                },
+                showSyncSettings() {
+                    this.$emit('open-settings');
+                }
+            }
+        };
+
+        // 主组件
+        const SyncFolder = {
+            template: `
+                <div class="flex flex-col h-screen">
+                    <!-- 头部 -->
+                    <Header 
+                        @toggle-sidebar="toggleSidebar"
+                        @search="handleSearch"
+                    ></Header>
+                    
+                    <div class="flex flex-1 overflow-hidden">
+                        <!-- 侧边栏 -->
+                        <Sidebar 
+                            :is-open="sidebarOpen" 
+                            :storage-info="storageInfo"
+                        ></Sidebar>
+                        
+                        <!-- 主内容区 -->
+                        <main class="flex-1 overflow-y-auto p-4 md:p-6">
+                            <div class="max-w-7xl mx-auto">
+                                <!-- 页面标题 -->
+                                <div class="flex justify-between items-center mb-6">
+                                    <h1 class="text-2xl font-bold text-gray-800">同步文件夹</h1>
+                                    <button class="btn-primary" @click="addNewSyncFolder">
+                                        <i class="fa fa-plus mr-1"></i> 添加同步文件夹
+                                    </button>
+                                </div>
+                                
+                                <!-- 同步状态概览 -->
+                                <SyncStatusOverview 
+                                    :sync-summary="syncSummary"
+                                    @sync-all="syncAllNow"
+                                    @open-settings="openSyncSettings"
+                                ></SyncStatusOverview>
+                                
+                                <!-- 视图切换 -->
+                                <div class="flex justify-between items-center mb-6">
+                                    <div class="view-tabs">
+                                        <button 
+                                            class="view-tab" 
+                                            :class="{ active: activeView === 'folders' }"
+                                            @click="activeView = 'folders'"
+                                        >
+                                            同步文件夹
+                                        </button>
+                                        <button 
+                                            class="view-tab" 
+                                            :class="{ active: activeView === 'files' }"
+                                            @click="activeView = 'files'"
+                                        >
+                                            所有同步文件
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="sort-controls">
+                                        <select v-model="sortBy" @change="sortItems" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                            <option value="name">按名称排序</option>
+                                            <option value="lastSyncTime">按最近同步排序</option>
+                                            <option value="size">按大小排序</option>
+                                            <option value="syncStatus">按同步状态排序</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <!-- 同步文件夹列表 -->
+                                <div v-if="activeView === 'folders'">
+                                    <div v-if="filteredFolders.length > 0">
+                                        <SyncFolderItem 
+                                            v-for="folder in filteredFolders" 
+                                            :key="folder.id"
+                                            :folder="folder"
+                                            @open="openFolder"
+                                            @sync-now="syncFolderNow"
+                                            @download="downloadFolder"
+                                            @rename="renameFolder"
+                                            @remove-sync="removeFolderSync"
+                                        ></SyncFolderItem>
+                                    </div>
+                                    
+                                    <div v-if="filteredFolders.length === 0" class="empty-state">
+                                        <i class="fa fa-folder-open-o text-5xl text-gray-300 mb-4"></i>
+                                        <h3 class="text-lg font-medium text-gray-700 mb-2">暂无同步文件夹</h3>
+                                        <p class="text-gray-500 mb-6">点击"添加同步文件夹"按钮开始设置文件夹同步</p>
+                                        <button class="btn-primary" @click="addNewSyncFolder">
+                                            <i class="fa fa-plus mr-1"></i> 添加同步文件夹
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- 所有同步文件列表 -->
+                                <div v-if="activeView === 'files'">
+                                    <div v-if="filteredFiles.length > 0">
+                                        <SyncFileItem 
+                                            v-for="file in filteredFiles" 
+                                            :key="file.id"
+                                            :file="file"
+                                            @open="openFile"
+                                            @sync-now="syncFileNow"
+                                            @download="downloadFile"
+                                            @preview="previewFile"
+                                            @remove-sync="removeFileSync"
+                                        ></SyncFileItem>
+                                    </div>
+                                    
+                                    <div v-if="filteredFiles.length === 0" class="empty-state">
+                                        <i class="fa fa-file-o text-5xl text-gray-300 mb-4"></i>
+                                        <h3 class="text-lg font-medium text-gray-700 mb-2">暂无同步文件</h3>
+                                        <p class="text-gray-500 mb-6">添加同步文件夹后，这里将显示所有同步的文件</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </main>
+                    </div>
+                </div>
+            `,
+            components: {
+                Header,
+                Sidebar,
+                SyncFolderItem,
+                SyncFileItem,
+                SyncStatusOverview
+            },
+            data() {
+                return {
+                    sidebarOpen: true,
+                    storageInfo: {
+                        usedGb: 2.5,
+                        totalGb: 10,
+                        usedPercent: 25
+                    },
+                    activeView: 'folders', // 'folders' 或 'files'
+                    sortBy: 'name',
+                    searchQuery: '',
+                    syncFolders: [
+                        {
+                            id: 1,
+                            name: '工作文档',
+                            fileCount: 24,
+                            totalSize: 157286400, // 150MB
+                            syncStatus: 'synced',
+                            lastSyncTime: '2023-11-15T10:30:00',
+                            localPath: 'C:/Users/用户/工作文档'
+                        },
+                        {
+                            id: 2,
+                            name: '照片库',
+                            fileCount: 156,
+                            totalSize: 2147483648, // 2GB
+                            syncStatus: 'syncing',
+                            lastSyncTime: '2023-11-15T14:22:00',
+                            localPath: 'D:/我的照片'
+                        },
+                        {
+                            id: 3,
+                            name: '项目资料',
+                            fileCount: 8,
+                            totalSize: 524288000, // 500MB
+                            syncStatus: 'error',
+                            lastSyncTime: '2023-11-14T09:15:00',
+                            localPath: 'C:/Projects/资料'
+                        }
+                    ],
+                    syncFiles: [
+                        {
+                            id: 101,
+                            name: '项目计划书.docx',
+                            type: 'doc',
+                            size: 2097152, // 2MB
+                            folderId: 1,
+                            folderName: '工作文档',
+                            syncStatus: 'synced',
+                            lastSyncTime: '2023-11-15T10:30:00'
+                        },
+                        {
+                            id: 102,
+                            name: '季度报告.pdf',
+                            type: 'pdf',
+                            size: 5242880, // 5MB
+                            folderId: 1,
+                            folderName: '工作文档',
+                            syncStatus: 'synced',
+                            lastSyncTime: '2023-11-15T10:28:00'
+                        },
+                        {
+                            id: 103,
+                            name: 'IMG_202311.jpg',
+                            type: 'image',
+                            size: 3145728, // 3MB
+                            folderId: 2,
+                            folderName: '照片库',
+                            syncStatus: 'syncing',
+                            lastSyncTime: '2023-11-15T14:22:00'
+                        },
+                        {
+                            id: 104,
+                            name: '产品原型图.sketch',
+                            type: 'doc',
+                            size: 8388608, // 8MB
+                            folderId: 3,
+                            folderName: '项目资料',
+                            syncStatus: 'error',
+                            lastSyncTime: '2023-11-14T09:15:00'
+                        },
+                        {
+                            id: 105,
+                            name: '会议录音.mp3',
+                            type: 'audio',
+                            size: 10485760, // 10MB
+                            folderId: 1,
+                            folderName: '工作文档',
+                            syncStatus: 'pending',
+                            lastSyncTime: '2023-11-15T11:45:00'
+                        }
+                    ]
+                };
+            },
+            computed: {
+                syncSummary() {
+                    const totalCount = this.syncFiles.length;
+                    const syncedCount = this.syncFiles.filter(f => f.syncStatus === 'synced').length;
+                    const syncingCount = this.syncFiles.filter(f => f.syncStatus === 'syncing').length;
+                    const errorCount = this.syncFiles.filter(f => f.syncStatus === 'error').length;
+                    
+                    return {
+                        totalCount,
+                        syncedCount,
+                        syncingCount,
+                        errorCount
+                    };
+                },
+                filteredFolders() {
+                    let result = [...this.syncFolders];
+                    
+                    // 搜索过滤
+                    if (this.searchQuery) {
+                        const query = this.searchQuery.toLowerCase();
+                        result = result.filter(folder => 
+                            folder.name.toLowerCase().includes(query)
+                        );
+                    }
+                    
+                    // 排序
+                    return this.sortFolders(result);
+                },
+                filteredFiles() {
+                    let result = [...this.syncFiles];
+                    
+                    // 搜索过滤
+                    if (this.searchQuery) {
+                        const query = this.searchQuery.toLowerCase();
+                        result = result.filter(file => 
+                            file.name.toLowerCase().includes(query) || 
+                            file.folderName.toLowerCase().includes(query)
+                        );
+                    }
+                    
+                    // 排序
+                    return this.sortFiles(result);
+                }
+            },
+            methods: {
+                toggleSidebar() {
+                    this.sidebarOpen = !this.sidebarOpen;
+                },
+                handleSearch(query) {
+                    this.searchQuery = query;
+                },
+                sortFolders(folders) {
+                    return folders.sort((a, b) => {
+                        switch(this.sortBy) {
+                            case 'name':
+                                return a.name.localeCompare(b.name);
+                            case 'lastSyncTime':
+                                return new Date(b.lastSyncTime) - new Date(a.lastSyncTime);
+                            case 'size':
+                                return b.totalSize - a.totalSize;
+                            case 'syncStatus':
+                                // 排序优先级: error > syncing > pending > synced
+                                const statusOrder = { error: 4, syncing: 3, pending: 2, synced: 1 };
+                                return statusOrder[b.syncStatus] - statusOrder[a.syncStatus];
+                            default:
+                                return 0;
+                        }
+                    });
+                },
+                sortFiles(files) {
+                    return files.sort((a, b) => {
+                        switch(this.sortBy) {
+                            case 'name':
+                                return a.name.localeCompare(b.name);
+                            case 'lastSyncTime':
+                                return new Date(b.lastSyncTime) - new Date(a.lastSyncTime);
+                            case 'size':
+                                return b.size - a.size;
+                            case 'syncStatus':
+                                // 排序优先级: error > syncing > pending > synced
+                                const statusOrder = { error: 4, syncing: 3, pending: 2, synced: 1 };
+                                return statusOrder[b.syncStatus] - statusOrder[a.syncStatus];
+                            default:
+                                return 0;
+                        }
+                    });
+                },
+                sortItems() {
+                    // 排序逻辑在计算属性中处理
+                },
+                // 文件夹相关操作
+                openFolder(folderId) {
+                    // 打开文件夹，跳转到文件管理页面并筛选该文件夹内容
+                    window.location.href = `file-manager.html?folder=${folderId}`;
+                },
+                syncFolderNow(folderId) {
+                    // 立即同步文件夹
+                    const folder = this.syncFolders.find(f => f.id === folderId);
+                    if (folder) {
+                        folder.syncStatus = 'syncing';
+                        
+                        // 模拟同步过程
+                        setTimeout(() => {
+                            folder.syncStatus = 'synced';
+                            folder.lastSyncTime = new Date().toISOString();
+                            
+                            // 更新该文件夹下的文件状态
+                            this.syncFiles.forEach(file => {
+                                if (file.folderId === folderId) {
+                                    file.syncStatus = 'synced';
+                                    file.lastSyncTime = folder.lastSyncTime;
+                                }
+                            });
+                        }, 2000 + Math.random() * 3000);
+                    }
+                },
+                downloadFolder(folderId) {
+                    const folder = this.syncFolders.find(f => f.id === folderId);
+                    if (folder) {
+                        alert(`开始下载文件夹: ${folder.name}`);
+                        // 实际项目中应调用下载API
+                        window.location.href = `file-download.html?folder=${folderId}`;
+                    }
+                },
+                renameFolder(folderId) {
+                    const folder = this.syncFolders.find(f => f.id === folderId);
+                    if (folder) {
+                        const newName = prompt(`重命名文件夹 "${folder.name}"`, folder.name);
+                        if (newName && newName !== folder.name) {
+                            folder.name = newName;
+                            // 同时更新文件中的文件夹名称
+                            this.syncFiles.forEach(file => {
+                                if (file.folderId === folderId) {
+                                    file.folderName = newName;
+                                }
+                            });
+                        }
+                    }
+                },
+                removeFolderSync(folderId) {
+                    if (confirm('确定要取消该文件夹的同步吗？本地文件不会被删除。')) {
+                        // 从同步列表中移除文件夹
+                        this.syncFolders = this.syncFolders.filter(f => f.id !== folderId);
+                        // 从同步文件列表中移除该文件夹下的所有文件
+                        this.syncFiles = this.syncFiles.filter(f => f.folderId !== folderId);
+                    }
+                },
+                
+                // 文件相关操作
+                openFile(fileId) {
+                    const file = this.syncFiles.find(f => f.id === fileId);
+                    if (file) {
+                        if (file.type === 'folder') {
+                            window.location.href = `file-manager.html?folder=${fileId}`;
+                        } else {
+                            window.location.href = `file-preview.html?id=${fileId}`;
+                        }
+                    }
+                },
+                syncFileNow(fileId) {
+                    const file = this.syncFiles.find(f => f.id === fileId);
+                    if (file) {
+                        file.syncStatus = 'syncing';
+                        
+                        // 模拟同步过程
+                        setTimeout(() => {
+                            file.syncStatus = Math.random() > 0.1 ? 'synced' : 'error';
+                            file.lastSyncTime = new Date().toISOString();
+                        }, 1000 + Math.random() * 2000);
+                    }
+                },
+                downloadFile(fileId) {
+                    window.location.href = `file-download.html?id=${fileId}`;
+                },
+                previewFile(fileId) {
+                    window.location.href = `file-preview.html?id=${fileId}`;
+                },
+                removeFileSync(fileId) {
+                    if (confirm('确定要取消该文件的同步吗？本地文件不会被删除。')) {
+                        this.syncFiles = this.syncFiles.filter(f => f.id !== fileId);
+                    }
+                },
+                
+                // 其他操作
+                syncAllNow() {
+                    // 更新所有文件夹状态为同步中
+                    this.syncFolders.forEach(folder => {
+                        if (folder.syncStatus !== 'syncing') {
+                            folder.syncStatus = 'syncing';
+                        }
+                    });
+                    
+                    // 更新所有文件状态为同步中
+                    this.syncFiles.forEach(file => {
+                        if (file.syncStatus !== 'syncing') {
+                            file.syncStatus = 'syncing';
+                        }
+                    });
+                    
+                    // 模拟全部同步完成
+                    setTimeout(() => {
+                        const now = new Date().toISOString();
+                        
+                        // 更新文件夹状态
+                        this.syncFolders.forEach(folder => {
+                            folder.syncStatus = 'synced';
+                            folder.lastSyncTime = now;
+                        });
+                        
+                        // 更新文件状态
+                        this.syncFiles.forEach(file => {
+                            file.syncStatus = Math.random() > 0.05 ? 'synced' : 'error';
+                            file.lastSyncTime = now;
+                        });
+                    }, 3000 + Math.random() * 5000);
+                },
+                addNewSyncFolder() {
+                    alert('打开添加同步文件夹对话框');
+                    // 实际项目中这里应该打开一个模态框让用户选择要同步的文件夹
+                },
+                openSyncSettings() {
+                    alert('打开全局同步设置');
+                }
+            }
+        };
+
+        // 创建Vue应用
+        const { createApp } = Vue;
+        createApp(SyncFolder).mount('#app');
+    </script>
+
+
