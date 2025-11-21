@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件分享</title>
+    <link rel="stylesheet" href="style_2.css">
+    <script src="api.js"></script>
+</head>
+<body class="font-inter bg-neutral min-h-screen flex items-center justify-center">
+    <div class="card w-full max-w-lg" id="share-app">
+        <h1 class="text-2xl font-bold mb-4">文件分享</h1>
+        <div id="share-content">
+            <p>加载中...</p>
+        </div>
+    </div>
+    <script>
+        (async function(){
+            const params = new URLSearchParams(window.location.search);
+            const token = params.get('token');
+            if (!token) {
+                document.getElementById('share-content').innerHTML = '<p class="text-red-500">缺少分享令牌</p>';
+                return;
+            }
+            try {
+                const res = await CloudApi.apiGet(`/share/access?token=${encodeURIComponent(token)}`);
+                if (res?.success === false) {
+                    throw new Error(res.message || '分享不存在或已过期');
+                }
+                const data = res?.data || res || {};
+                const html = `
+                    <p><strong>文件名：</strong>${data.fileName || '未知文件'}</p>
+                    <p><strong>有效期：</strong>${data.expireAt || '无'}</p>
+                    <button class="toolbar-btn-primary mt-4" onclick="CloudApi.apiDownload('/files/download?fileId=${data.fileId}', '${data.fileName || 'download'}')">下载文件</button>
+                `;
+                document.getElementById('share-content').innerHTML = html;
+            } catch (e) {
+                document.getElementById('share-content').innerHTML = `<p class="text-red-500">${e.message || '加载失败'}</p>`;
+            }
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件下载 - OK-TREE-WIN-云盘存储</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="api.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#4080FF',
+                        neutral: '#F5F7FA',
+                        dark: '#1D2129',
+                        'gray-light': '#C9CDD4'
+                    },
+                    fontFamily: {
+                        inter: ['Inter', 'system-ui', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .download-container {
+                @apply max-w-3xl mx-auto p-4 md:p-8 bg-white rounded-xl shadow-md my-8;
+            }
+            .progress-bar {
+                @apply h-2 bg-gray-200 rounded-full overflow-hidden;
+            }
+            .progress-fill {
+                @apply h-full bg-primary transition-all duration-300;
+            }
+            .action-btn {
+                @apply flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200;
+            }
+            .action-btn-primary {
+                @apply bg-primary text-white hover:bg-primary/90;
+            }
+            .action-btn-secondary {
+                @apply bg-white border border-gray-200 hover:bg-neutral;
+            }
+        }
+    </style>
+</head>
+<body class="font-inter bg-neutral min-h-screen text-dark">
+    <div id="app">
+        <!-- 头部导航 -->
+        <header class="bg-white shadow-sm px-4 py-3 flex items-center justify-between z-20">
+            <div class="flex items-center gap-4">
+                <button @click="goBack" class="text-dark p-2 rounded-full hover:bg-neutral transition-all">
+                    <i class="fa fa-arrow-left"></i>
+                </button>
+                <div class="flex items-center gap-2">
+                    <i class="fa fa-cloud text-primary text-2xl"></i>
+                    <h1 class="text-xl font-bold text-dark">云盘存储</h1>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主内容区 -->
+        <main class="flex-1 p-4 md:p-6">
+            <!-- 加载状态 -->
+            <div v-if="loading" class="flex flex-col items-center justify-center h-[60vh]">
+                <i class="fa fa-spinner fa-spin text-3xl text-primary mb-4"></i>
+                <p>获取文件信息中...</p>
+            </div>
+
+            <!-- 错误状态 -->
+            <div v-else-if="!file" class="flex flex-col items-center justify-center h-[60vh]">
+                <i class="fa fa-exclamation-circle text-6xl text-red-500 mb-4"></i>
+                <h3 class="text-lg font-medium mb-2">文件不存在</h3>
+                <p class="text-gray-light mb-6">文件可能已被删除或链接无效</p>
+                <button @click="goBack" class="action-btn action-btn-primary">
+                    <i class="fa fa-arrow-left"></i>
+                    <span>返回文件管理</span>
+                </button>
+            </div>
+
+            <!-- 下载页面 -->
+            <div v-else class="download-container">
+                <div class="flex items-start gap-6 mb-6">
+                    <!-- 文件图标 -->
+                    <div class="text-6xl" :class="getFileIconClass(file.name)"></div>
+                    
+                    <!-- 文件信息 -->
+                    <div class="flex-1">
+                        <h2 class="text-xl font-medium mb-2">{{ file.name }}</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-y-2 text-sm text-gray-light">
+                            <p><span class="font-normal text-dark">大小：</span>{{ formatSize(file.size) }}</p>
+                            <p><span class="font-normal text-dark">修改时间：</span>{{ formatDate(file.modifiedTime) }}</p>
+                            <p><span class="font-normal text-dark">类型：</span>{{ getFileType(file.name) }}</p>
+                            <p><span class="font-normal text-dark">存储位置：</span>{{ file.path || '我的文件' }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 下载控制 -->
+                <div class="border-t pt-6">
+                    <button 
+                        @click="startDownload" 
+                        class="action-btn action-btn-primary mb-6"
+                        :disabled="isDownloading"
+                    >
+                        <i v-if="!isDownloading" class="fa fa-download"></i>
+                        <i v-if="isDownloading" class="fa fa-spinner fa-spin"></i>
+                        <span>{{ isDownloading ? '下载中...' : '开始下载' }}</span>
+                    </button>
+
+                    <!-- 下载进度 -->
+                    <div v-if="isDownloading" class="mb-6">
+                        <div class="flex justify-between text-sm mb-2">
+                            <span>下载进度</span>
+                            <span>{{ downloadProgress }}%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" :style="{ width: downloadProgress + '%' }"></div>
+                        </div>
+                        <p class="text-xs text-gray-light mt-2">
+                            {{ formatSize(downloadedSize) }} / {{ formatSize(file.size) }}
+                        </p>
+                    </div>
+
+                    <!-- 下载完成 -->
+                    <div v-if="downloadCompleted" class="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+                        <div class="flex items-center gap-3">
+                            <i class="fa fa-check-circle text-green-500 text-xl"></i>
+                            <div>
+                                <p class="font-medium">下载已完成</p>
+                                <p class="text-sm text-gray-light">文件已保存到本地</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // 登录状态验证（与其他页面保持一致）
+        const token = localStorage.getItem('cloudDiskToken');
+        if (!token) {
+            window.location.href = 'login.html';
+        }
+
+        // 工具函数：从URL获取文件ID
+        const getFileIdFromUrl = () => {
+            const params = new URLSearchParams(window.location.search);
+            const fileId = params.get('id');
+            return fileId && !isNaN(Number(fileId)) ? Number(fileId) : null;
+        };
+
+        // 模拟获取文件详情（实际项目替换为后端API）
+        const getFileDetails = (fileId) => {
+            return new Promise((resolve) => {
+                // 模拟文件数据（实际应从后端获取）
+                const mockFiles = [
+                    {
+                        id: 1,
+                        name: '项目计划书.pdf',
+                        isFolder: false,
+                        modifiedTime: '2023-11-15T14:30:00',
+                        size: 2097152, // 2MB
+                        path: '我的文件/工作文档'
+                    },
+                    {
+                        id: 2,
+                        name: '产品原型图.png',
+                        isFolder: false,
+                        modifiedTime: '2023-11-10T09:45:00',
+                        size: 1048576, // 1MB
+                        path: '我的文件/设计资源'
+                    },
+                    {
+                        id: 3,
+                        name: '会议记录.docx',
+                        isFolder: false,
+                        modifiedTime: '2023-11-05T16:20:00',
+                        size: 524288, // 512KB
+                        path: '我的文件/会议资料'
+                    },
+                    {
+                        id: 6,
+                        name: '数据报表.xlsx',
+                        isFolder: false,
+                        modifiedTime: '2023-10-10T09:15:00',
+                        size: 524288, // 512KB
+                        path: '我的文件/财务数据'
+                    }
+                ];
+
+                const matchedFile = mockFiles.find(file => file.id === fileId);
+                setTimeout(() => resolve(matchedFile), 800);
+            });
+        };
+
+        // Vue应用实例
+        const { createApp } = Vue;
+        createApp({
+            data() {
+                return {
+                    file: null,
+                    loading: true,
+                    fileId: getFileIdFromUrl(),
+                    isDownloading: false,
+                    downloadProgress: 0,
+                    downloadedSize: 0,
+                    downloadCompleted: false,
+                    downloadInterval: null
+                };
+            },
+            async mounted() {
+                if (!this.fileId) {
+                    this.loading = false;
+                    return;
+                }
+
+                try {
+                    const fileData = await getFileDetails(this.fileId);
+                    this.file = fileData;
+                } catch (error) {
+                    console.error('获取文件详情失败：', error);
+                } finally {
+                    this.loading = false;
+                }
+            },
+            methods: {
+                // 返回上一页
+                goBack() {
+                    window.history.back() || (window.location.href = 'file-manager.html');
+                },
+
+                // 开始下载
+                startDownload() {
+                    if (this.isDownloading) return;
+
+                    this.isDownloading = true;
+                    this.downloadProgress = 0;
+                    this.downloadedSize = 0;
+                    this.downloadCompleted = false;
+
+                    // 模拟下载进度（实际项目中应监听真实下载进度）
+                    this.downloadInterval = setInterval(() => {
+                        const progressStep = Math.random() * 10;
+                        this.downloadProgress += progressStep;
+                        this.downloadedSize = Math.floor((this.downloadProgress / 100) * this.file.size);
+
+                        if (this.downloadProgress >= 100) {
+                            this.downloadProgress = 100;
+                            this.downloadedSize = this.file.size;
+                            this.isDownloading = false;
+                            this.downloadCompleted = true;
+                            clearInterval(this.downloadInterval);
+                            
+                                    // 实际项目中触发真实下载
+                                        this.triggerRealDownload();
+                        }
+                    }, 500);
+                },
+
+                // 触发真实下载（调用后端API）
+                async triggerRealDownload() {
+                    try {
+                        await CloudApi.apiDownload(`/files/download?id=${encodeURIComponent(this.file.id)}`, this.file.name);
+                    } catch (e) {
+                        console.error('真实下载失败', e);
+                        alert('下载失败，请稍后重试');
+                    }
+                },
+
+                // 格式化日期
+                formatDate(dateString) {
+                    const date = new Date(dateString);
+                    return date.toLocaleString('zh-CN', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                },
+
+                // 格式化文件大小
+                formatSize(bytes) {
+                    if (bytes < 1024) return `${bytes} B`;
+                    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+                    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+                },
+
+                // 获取文件类型
+                getFileType(filename) {
+                    const ext = filename.split('.').pop().toLowerCase();
+                    const types = {
+                        pdf: 'PDF文档',
+                        doc: 'Word文档',
+                        docx: 'Word文档',
+                        xls: 'Excel表格',
+                        xlsx: 'Excel表格',
+                        png: '图片文件',
+                        jpg: '图片文件',
+                        jpeg: '图片文件',
+                        gif: '图片文件',
+                        mp4: '视频文件',
+                        mp3: '音频文件',
+                        zip: '压缩文件',
+                        rar: '压缩文件'
+                    };
+                    return types[ext] || '未知文件';
+                },
+
+                // 获取文件图标样式
+                getFileIconClass(filename) {
+                    const ext = filename.split('.').pop().toLowerCase();
+                    const icons = {
+                        pdf: 'fa fa-file-pdf-o text-red-500',
+                        doc: 'fa fa-file-word-o text-blue-500',
+                        docx: 'fa fa-file-word-o text-blue-500',
+                        xls: 'fa fa-file-excel-o text-green-500',
+                        xlsx: 'fa fa-file-excel-o text-green-500',
+                        png: 'fa fa-file-image-o text-purple-500',
+                        jpg: 'fa fa-file-image-o text-purple-500',
+                        jpeg: 'fa fa-file-image-o text-purple-500',
+                        gif: 'fa fa-file-image-o text-purple-500',
+                        mp4: 'fa fa-file-video-o text-orange-500',
+                        mp3: 'fa fa-file-audio-o text-indigo-500',
+                        zip: 'fa fa-file-zip-o text-yellow-500',
+                        rar: 'fa fa-file-zip-o text-yellow-500'
+                    };
+                    return icons[ext] || 'fa fa-file-o text-gray-500';
+                }
+            },
+            beforeUnmount() {
+                // 清理定时器
+                if (this.downloadInterval) {
+                    clearInterval(this.downloadInterval);
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
